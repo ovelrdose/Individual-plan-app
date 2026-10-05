@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Похожая программа уже есть{% endblock %}
+
+{% block content %}
+  <h1 class="h3 mb-3">Похожая программа уже есть</h1>
+
+  <div class="alert alert-warning" style="max-width: 48rem">
+    <p>
+      Для пациента <strong>{{ sheet.full_name }}</strong>{% if sheet.history_number %} (ИБ № {{ sheet.history_number }}){% endif %}
+      уже есть программа с пересекающимися датами курса:
+    </p>
+    <ul>
+      {% for program in duplicates %}
+        <li>
+          <a href="{% url 'programs:detail' program.pk %}">{{ program.full_name }}, палата {{ program.room }}</a>,
+          {{ program.start_date|date:"d.m.Y" }} – {{ program.end_date|date:"d.m.Y" }}
+        </li>
+      {% endfor %}
+    </ul>
+    <p class="mb-0">Если назначения изменились — поправьте их в существующей программе. Новая программа нужна только
+      для другого курса лечения.</p>
+  </div>
+
+  <form method="post" action="{% url 'exchange:sheet_import_force' %}" class="d-flex gap-2">
+    {% csrf_token %}
+    <input type="hidden" name="token" value="{{ token }}">
+    <a href="{% url 'programs:detail' duplicates.0.pk %}" class="btn btn-success">Открыть существующую</a>
+    <button type="submit" class="btn btn-outline-danger">Всё равно создать новую</button>
+  </form>
+{% endblock %}

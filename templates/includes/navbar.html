@@ -1,0 +1,89 @@
+<nav class="navbar navbar-expand bg-body-tertiary border-bottom">
+  <div class="container-fluid px-4">
+    <a class="navbar-brand fw-semibold" href="{% url 'home' %}">
+      <i class="bi bi-calendar2-heart text-success"></i> Программа реабилитации
+    </a>
+
+    {% if current_department %}
+      <ul class="navbar-nav me-auto">
+        <li class="nav-item">
+          <a class="nav-link {% if request.resolver_match.app_name == 'programs' or request.resolver_match.app_name == 'exchange' %}active fw-semibold{% endif %}" href="{% url 'programs:list' %}">
+            <i class="bi bi-journal-medical"></i> Индивидуальные программы
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.resolver_match.url_name == 'board' %}active fw-semibold{% endif %}" href="{% url 'scheduling:board' %}">
+            <i class="bi bi-grid-3x3"></i> Шахматка
+          </a>
+        </li>
+        {% if can_edit_group_schedule %}
+          <li class="nav-item">
+            <a class="nav-link {% if request.resolver_match.url_name == 'group_schedule' %}active fw-semibold{% endif %}" href="{% url 'scheduling:group_schedule' %}">
+              <i class="bi bi-clock"></i> Расписание групп
+            </a>
+          </li>
+        {% endif %}
+        {% if can_manage_staff %}
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle {% if request.resolver_match.app_name == 'staff' %}active fw-semibold{% endif %}" href="#"
+               role="button" data-bs-toggle="dropdown" aria-expanded="false">
+              <i class="bi bi-people"></i> Инструкторы
+            </a>
+            <ul class="dropdown-menu">
+              <li><a class="dropdown-item" href="{% url 'staff:shifts' %}"><i class="bi bi-calendar3"></i> Смены</a></li>
+              <li><a class="dropdown-item" href="{% url 'staff:duties' %}"><i class="bi bi-list-check"></i> Распорядок</a></li>
+              <li><a class="dropdown-item" href="{% url 'scheduling:changes' %}"><i class="bi bi-arrow-left-right"></i> Перестройки</a></li>
+              <li><a class="dropdown-item" href="{% url 'scheduling:load' %}"><i class="bi bi-bar-chart"></i> Загрузка инструкторов</a></li>
+            </ul>
+          </li>
+        {% endif %}
+      </ul>
+    {% endif %}
+
+    <div class="d-flex align-items-center gap-3 ms-auto">
+      {% if user_departments|length > 1 %}
+        <form method="post" action="{% url 'switch_department' %}" class="d-flex align-items-center">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+          <label for="department-select" class="visually-hidden">Отделение</label>
+          <select id="department-select" name="department" class="form-select form-select-sm"
+                  onchange="this.form.submit()">
+            {% for department in user_departments %}
+              <option value="{{ department.pk }}" {% if department == current_department %}selected{% endif %}>
+                {{ department.name }}
+              </option>
+            {% endfor %}
+          </select>
+          <noscript><button type="submit" class="btn btn-sm btn-outline-secondary ms-1">Выбрать</button></noscript>
+        </form>
+      {% elif current_department %}
+        <span class="fw-semibold">{{ current_department.name }}</span>
+      {% endif %}
+
+      <div class="dropdown">
+        <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button"
+                data-bs-toggle="dropdown" aria-expanded="false">
+          <i class="bi bi-person-circle"></i> {{ user }}
+          {% if user_is_admin %}
+            <span class="badge text-bg-dark ms-1">Администратор</span>
+          {% elif current_role %}
+            <span class="badge text-bg-secondary ms-1">{{ current_role.label }}</span>
+          {% endif %}
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+          {% if user.is_staff %}
+            <li><a class="dropdown-item" href="{% url 'admin:index' %}"><i class="bi bi-gear"></i> {% if user_is_admin %}Администрирование{% else %}Справочники{% endif %}</a></li>
+          {% endif %}
+          <li><a class="dropdown-item" href="{% url 'password_change' %}"><i class="bi bi-key"></i> Сменить пароль</a></li>
+          <li><hr class="dropdown-divider"></li>
+          <li>
+            <form method="post" action="{% url 'logout' %}">
+              {% csrf_token %}
+              <button type="submit" class="dropdown-item"><i class="bi bi-box-arrow-right"></i> Выйти</button>
+            </form>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</nav>

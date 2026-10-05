@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Распорядок инструкторов{% endblock %}
+
+{% block content %}
+  <h1 class="h3">Распорядок инструкторов</h1>
+  <p class="text-body-secondary">
+    Постоянный распорядок — что инструктор делает в слоте каждый свой рабочий день: ведёт группу,
+    БОС, «Метод. работа», прочее. В такие слоты пациентов не ставят. На конкретную дату распорядок
+    можно заменить или снять разовым блоком.
+  </p>
+
+  {% if selected %}
+    <form method="get" class="d-flex align-items-center gap-2 mb-3">
+      <label for="instructor-select" class="form-label mb-0">Инструктор</label>
+      <select id="instructor-select" name="instructor" class="form-select w-auto" onchange="this.form.submit()">
+        {% for item in instructors %}
+          <option value="{{ item.pk }}" {% if item == selected %}selected{% endif %}>{{ item.short_name }}{% if item.partner_id %} (пара {{ item.team_label }}){% endif %}</option>
+        {% endfor %}
+      </select>
+      <noscript><button type="submit" class="btn btn-sm btn-outline-secondary">Показать</button></noscript>
+    </form>
+
+    <div class="row g-4">
+      <div class="col-xl-7">
+        <h2 class="h5">Постоянный распорядок</h2>
+        {% include "staff/_duties.html" %}
+      </div>
+      <div class="col-xl-5">
+        <h2 class="h5">Разовые блоки на дату</h2>
+        {% include "staff/_blocks.html" %}
+      </div>
+    </div>
+  {% else %}
+    <p class="text-body-secondary">Действующих инструкторов нет — они заводятся в справочниках.</p>
+  {% endif %}
+{% endblock %}

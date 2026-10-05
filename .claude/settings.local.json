@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sed -n '/^## 4. Модель/,/^## 5/p;/^## 8. Польз/,/^## 9/p' docs/03-architecture.md)",
+      "Bash(sudo -n true)",
+      "Bash(apt-cache policy *)",
+      "Bash(python3 -m venv .venv)",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/pip --version)"
+    ]
+  }
+}

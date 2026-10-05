@@ -1,0 +1,33 @@
+{
+  "3": {
+    "department": "N2",
+    "full_name": "I10",
+    "sex_age": "I11",
+    "doctor": "J12",
+    "schedule": {"first_row": 4, "last_row": 13, "time_col": "B", "label_col": "C", "place_col": "F"},
+    "date_blocks": [
+      {"date_row": 17, "first_col": "C", "size": 11, "first_procedure_row": 18, "last_procedure_row": 32}
+    ]
+  },
+  "4": {
+    "department": "O2",
+    "full_name": "J10",
+    "sex_age": "J11",
+    "doctor": "K12",
+    "schedule": {"first_row": 4, "last_row": 13, "time_col": "B", "label_col": "C", "place_col": "F"},
+    "date_blocks": [
+      {"date_row": 17, "first_col": "C", "size": 15, "first_procedure_row": 18, "last_procedure_row": 33}
+    ]
+  },
+  "5": {
+    "department": "O2",
+    "full_name": "J10",
+    "sex_age": "J11",
+    "doctor": "K12",
+    "schedule": {"first_row": 4, "last_row": 13, "time_col": "B", "label_col": "C", "place_col": "F"},
+    "date_blocks": [
+      {"date_row": 18, "first_col": "C", "size": 10, "first_procedure_row": 19, "last_procedure_row": 30},
+      {"date_row": 31, "first_col": "C", "size": 10, "first_procedure_row": 32, "last_procedure_row": 43}
+    ]
+  }
+}

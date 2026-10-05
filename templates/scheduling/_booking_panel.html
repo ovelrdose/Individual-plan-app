@@ -1,0 +1,55 @@
+{# Правка занятия на странице программы (FR-SCH-9/10): специалист ФР. #}
+<div id="booking-panel" class="card shadow board-panel">
+  <div class="card-header d-flex align-items-center gap-2 py-2">
+    <strong>{{ booking.procedure.card_label|default:booking.procedure.name }}, {{ booking.date|date:"d.m" }}, {{ booking.start|time:"G:i" }}{% if booking.instructor %} {{ booking.instructor.short_name }}{% endif %}</strong>
+    {% if booking.pinned %}<i class="bi bi-pin-angle" title="Поставлено вручную"></i>{% endif %}
+    <button type="button" class="btn-close ms-auto" aria-label="Закрыть"
+            onclick="const p = this.closest('#booking-panel'); p.replaceChildren(); p.className = ''"></button>
+  </div>
+  <div class="card-body py-2">
+    {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
+    {% if confirm %}
+      <div class="alert alert-warning py-2">
+        <ul class="mb-1 ps-3">{% for item in confirm %}<li>{{ item.message }}</li>{% endfor %}</ul>
+        Если всё же нужно — укажите причину и сохраните ещё раз.
+      </div>
+    {% endif %}
+
+    {% if options %}
+      <form class="mb-3" hx-post="{% url 'scheduling:booking_edit' booking.pk %}" hx-target="#booking-panel" hx-swap="outerHTML">
+        <input type="hidden" name="version" value="{{ booking.version }}">
+        <label for="booking-target" class="form-label small mb-1">
+          {% if field == "target" %}{% if weekend %}Время (в выходной — без инструктора){% else %}Время и инструктор{% endif %}{% elif field == "session" %}Время группы{% else %}Время на тренажёре{% endif %}
+        </label>
+        <select id="booking-target" name="{{ field }}" class="form-select form-select-sm mb-2">
+          {% for value, label in options %}
+            <option value="{{ value }}"{% if value == selected %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        {% include "scheduling/_booking_scope.html" with name="scope" %}
+        {% if confirm %}{% include "scheduling/_board_reason.html" %}{% endif %}
+        <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-check-lg"></i> Сохранить</button>
+        <div class="form-text">Изменённое занятие закрепляется — подбор его не меняет. Для «всех следующих» даты,
+          где так нельзя, пропускаются и показываются списком.</div>
+      </form>
+    {% endif %}
+
+    <div class="d-flex flex-wrap gap-2">
+      {% if booking.pinned %}
+        <form hx-post="{% url 'scheduling:booking_unpin' booking.pk %}" hx-target="#booking-panel" hx-swap="outerHTML">
+          <input type="hidden" name="version" value="{{ booking.version }}">
+          {% include "scheduling/_booking_scope.html" with name="scope" compact=True %}
+          <button type="submit" class="btn btn-sm btn-outline-secondary" title="Подбор снова распоряжается занятием">
+            <i class="bi bi-pin"></i> Открепить
+          </button>
+        </form>
+      {% endif %}
+      <form hx-post="{% url 'scheduling:booking_remove' booking.pk %}" hx-target="#booking-panel" hx-swap="outerHTML"
+            hx-confirm="Убрать занятие? Подбор его не вернёт; вернуть — кнопкой «вернуть» в календаре.">
+        <input type="hidden" name="version" value="{{ booking.version }}">
+        {% include "scheduling/_booking_scope.html" with name="scope" compact=True %}
+        <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-x-lg"></i> Убрать</button>
+      </form>
+    </div>
+  </div>
+</div>

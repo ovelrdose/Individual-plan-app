@@ -1,0 +1,184 @@
+{% load schedule %}
+{# Расписание программы: проблемы, типичный день (как в карте), календарь курса. #}
+<div id="schedule"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="d-flex align-items-center gap-2 mb-2">
+    <h2 class="h5 mb-0">Расписание</h2>
+    {% if can_schedule %}
+      <form method="post" action="{% url 'scheduling:program_replan' program.pk %}" class="ms-auto">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-outline-secondary"
+                title="Например, после изменения расписания групп. Закреплённые вручную занятия не меняются.">
+          <i class="bi bi-arrow-repeat"></i> Подобрать заново
+        </button>
+      </form>
+    {% endif %}
+  </div>
+  <p class="text-body-secondary small">
+    Группы ЛФК, бассейн, индивидуальные занятия и тренажёры ставятся автоматически по расписанию групп
+    и сменам инструкторов и пересчитываются при изменении назначений. Уже поставленное индивидуальное
+    занятие при пересчёте остаётся у того же инструктора и в то же время, если это ещё возможно{% if can_schedule %};
+    «Подобрать заново» распределяет индивидуальные с нуля{% endif %}. Строки — слоты сетки инструкторов;
+    пустая строка — окно, в это время пациент свободен.
+  </p>
+
+  {% if schedule.individual %}
+    {# Инструктор по желанию пациента (решение 44): выбирает специалист ФР, врач видит. #}
+    <div class="card mb-3" id="preferred-instructor">
+      <div class="card-body py-2">
+        <h3 class="h6 mb-2">Инструктор по желанию пациента</h3>
+        {% if preferred_error %}<div class="alert alert-danger py-2 mb-2">{{ preferred_error }}</div>{% endif %}
+        {% if can_schedule %}
+          <form class="d-flex gap-2 align-items-center flex-wrap" method="post"
+                action="{% url 'scheduling:program_preferred_instructor' program.pk %}"
+                hx-post="{% url 'scheduling:program_preferred_instructor' program.pk %}"
+                hx-target="#schedule" hx-swap="outerHTML">
+            {% csrf_token %}
+            <select name="instructor" class="form-select form-select-sm" style="width: auto"
+                    aria-label="Инструктор по желанию пациента">
+              <option value="">— не выбран —</option>
+              {% for item in schedule.instructors %}
+                <option value="{{ item.pk }}"{% if item.pk == schedule.preferred.pk %} selected{% endif %}>{{ item.short_name }}</option>
+              {% endfor %}
+              {% if schedule.preferred and not schedule.preferred.is_active %}
+                <option value="{{ schedule.preferred.pk }}" selected>{{ schedule.preferred.short_name }} (не работает)</option>
+              {% endif %}
+            </select>
+            <button type="submit" class="btn btn-sm btn-outline-primary">Выбрать</button>
+          </form>
+          <div class="form-text">В его рабочие дни индивидуальные — только у него, в остальные — у напарника по 2/2 или другого свободного инструктора.</div>
+        {% elif schedule.preferred %}
+          <span>{{ schedule.preferred.short_name }}</span>
+        {% else %}
+          <span class="text-body-secondary">не выбран</span>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+
+  {% if schedule.pools %}
+    {# Группа бассейна для назначения «Бассейн» без группы (FR-PRG-3): выбирает специалист ФР. #}
+    <div class="card mb-3" id="pool-groups">
+      <div class="card-body py-2">
+        <h3 class="h6 mb-2">Группа бассейна</h3>
+        {% if pool_error %}<div class="alert alert-danger py-2 mb-2">{{ pool_error }}</div>{% endif %}
+        {% for item in schedule.pools %}
+          <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
+            <span class="text-body-secondary small">{{ item.raw_text|default:item.label|truncatechars:60 }}</span>
+            {% if can_schedule %}
+              <form class="d-flex gap-2 align-items-center" method="post"
+                    action="{% url 'scheduling:program_pool_group' program.pk item.pk %}"
+                    hx-post="{% url 'scheduling:program_pool_group' program.pk item.pk %}"
+                    hx-target="#schedule" hx-swap="outerHTML">
+                {% csrf_token %}
+                <select name="group" class="form-select form-select-sm" style="width: auto"
+                        aria-label="Группа бассейна">
+                  <option value="">— не выбрана —</option>
+                  {% for option in schedule.pool_groups %}
+                    <option value="{{ option.procedure.pk }}"{% if option.procedure.pk == item.pool_group_id %} selected{% endif %}>
+                      {{ option.procedure.name }} ({{ option.times }})
+                    </option>
+                  {% endfor %}
+                </select>
+                <button type="submit" class="btn btn-sm btn-outline-primary">Выбрать</button>
+              </form>
+            {% elif item.pool_group %}
+              <span>{{ item.pool_group.name }}</span>
+            {% else %}
+              <span class="text-danger">не выбрана — выбирает специалист ФР</span>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  {% endif %}
+
+  {% if schedule.conflicts %}
+    <div class="alert alert-danger">
+      <h3 class="h6"><i class="bi bi-x-octagon"></i> Не удалось поставить</h3>
+      <ul class="mb-0">{% for issue in schedule.conflicts %}<li>{{ issue.message }}</li>{% endfor %}</ul>
+    </div>
+  {% endif %}
+  {% if schedule.warnings %}
+    <div class="alert alert-warning">
+      <h3 class="h6"><i class="bi bi-info-circle"></i> В отдельные дни время другое</h3>
+      <ul class="mb-0">{% for issue in schedule.warnings %}<li>{{ issue.message }}</li>{% endfor %}</ul>
+    </div>
+  {% endif %}
+
+  {% if schedule.typical %}
+    <h3 class="h6 mt-3">Типичный день <span class="text-body-secondary fw-normal">— так в карте</span></h3>
+    <table class="table table-sm align-middle" style="max-width: 48rem">
+      <thead class="table-light">
+        <tr><th style="width: 6rem">Начало</th><th>Процедура</th><th>Место</th><th>Инструктор</th><th class="text-end">Дней</th></tr>
+      </thead>
+      <tbody>
+        {% for row in schedule.day %}
+          {% if row.is_window %}
+            <tr class="text-body-secondary">
+              <td>{{ row.start|hhmm }}</td>
+              <td colspan="4" class="fst-italic">окно — пациент свободен</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td class="fw-semibold">{{ row.start|hhmm }}</td>
+              <td>{{ row.label }}</td>
+              <td>{{ row.place|default:"—" }}</td>
+              <td>{{ row.who }}</td>
+              <td class="text-end">
+                {% for item in row.items %}{{ item.days }}{% if not forloop.last %}/{% endif %}{% endfor %}
+                {% if row.deviations %}
+                  <span class="badge text-bg-warning" title="В эти дни другое время">+{{ row.deviations }} иначе</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <details class="mt-2">
+      <summary class="mb-2">Календарь курса по дням</summary>
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered align-middle text-center small">
+          <thead class="table-light">
+            <tr>
+              <th class="text-start">Дата</th>
+              {% for column in schedule.columns %}<th>{{ column.procedure.card_label }}</th>{% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in schedule.calendar %}
+              <tr>
+                <td class="text-start text-nowrap">{{ row.date|date:"d.m D" }}</td>
+                {% for cell in row.cells %}{% with column=schedule.columns|index:forloop.counter0 %}
+                  <td class="{% if cell.deviation %}table-warning{% elif cell.active and not cell.bookings and not cell.removed %}table-danger{% elif not cell.active %}table-secondary{% endif %}">
+                    {% for booking in cell.bookings %}
+                      {% if can_schedule %}
+                        <button type="button" class="btn btn-link btn-sm p-0 text-reset text-decoration-none"
+                                hx-get="{% url 'scheduling:booking_panel' booking.pk %}" hx-target="#booking-panel" hx-swap="outerHTML"
+                                title="Изменить занятие {{ row.date|date:'d.m' }}">{{ booking.start|time:"G:i" }}{% if booking.instructor %} {{ booking.instructor.short_name }}{% endif %}</button>{% else %}{{ booking.start|time:"G:i" }}{% if booking.instructor %} {{ booking.instructor.short_name }}{% endif %}{% endif %}{% if booking.pinned %}<i class="bi bi-pin-angle" title="Поставлено вручную"></i>{% endif %}{% if not forloop.last %}, {% endif %}
+                    {% empty %}{% if cell.active and not cell.removed %}—{% endif %}{% endfor %}
+                    {% if cell.removed %}
+                      <span class="text-body-secondary">убрано</span>
+                      {% if can_schedule %}
+                        <button type="button" class="btn btn-link btn-sm p-0"
+                                hx-post="{% url 'scheduling:booking_restore' program.pk column.pk %}"
+                                hx-vals='{"date": "{{ row.date|date:"Y-m-d" }}"}'
+                                hx-target="#booking-panel" hx-swap="outerHTML">вернуть</button>
+                      {% endif %}
+                    {% endif %}
+                  </td>
+                {% endwith %}{% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="small text-body-secondary">Жёлтым — время не как в типичном дне, красным — занятие не поставлено, серым — назначение в этот день не действует. <i class="bi bi-pin-angle"></i> — поставлено вручную, подбор его не меняет.{% if can_schedule %} Нажмите на время, чтобы изменить, убрать или открепить занятие.{% endif %}</p>
+    </details>
+  {% elif not schedule.columns %}
+    <p class="text-body-secondary">В назначениях нет групп ЛФК, бассейна, индивидуальных занятий и тренажёров — ставить нечего.</p>
+  {% elif not schedule.conflicts %}
+    <p class="text-body-secondary">Занятия ещё не поставлены — нажмите «Подобрать заново».</p>
+  {% endif %}
+</div>

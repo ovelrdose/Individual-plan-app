@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Шахматка {{ board.day|date:"d.m.Y" }}{% endblock %}
+
+{% block navbar %}{% endblock %}
+
+{% block content %}
+  <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
+    <h1 class="h3 mb-0 me-3">Шахматка</h1>
+    <a class="btn btn-sm btn-outline-secondary" href="?date={{ board.previous|date:'Y-m-d' }}"
+       title="Предыдущий день"><i class="bi bi-chevron-left"></i></a>
+    <form method="get" class="d-flex gap-1">
+      <label for="board-date" class="visually-hidden">Дата</label>
+      <input id="board-date" type="date" name="date" value="{{ board.day|date:'Y-m-d' }}"
+             class="form-control form-control-sm" onchange="this.form.submit()">
+      <noscript><button type="submit" class="btn btn-sm btn-outline-secondary">Показать</button></noscript>
+    </form>
+    <a class="btn btn-sm btn-outline-secondary" href="?date={{ board.next|date:'Y-m-d' }}"
+       title="Следующий день"><i class="bi bi-chevron-right"></i></a>
+    <a class="btn btn-sm btn-link" href="{% url 'public_board' %}">Сегодня</a>
+    <span class="fw-semibold ms-2">{{ board.day|date:"l, j E Y" }}</span>
+  </div>
+  {% if board.is_weekend %}
+    <div class="alert alert-info py-2">Выходной: индивидуальные занятия ведут дежурные — пациенты в своё обычное время.</div>
+  {% endif %}
+  {% include "scheduling/_board.html" %}
+{% endblock %}

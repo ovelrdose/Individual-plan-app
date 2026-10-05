@@ -1,0 +1,17 @@
+{# Итог правки расписания групп: у кого пересобрано расписание, что осталось поправить вручную. #}
+{% if result %}
+  <div class="alert alert-success py-2">
+    Сохранено.
+    {% if result.programs %}
+      Расписание пересобрано у программ ({{ result.programs|length }}): {% for program in result.programs %}{{ program.room }}п {{ program.surname }}{% if program.department_id != current_department.pk %} ({{ program.department.name }}){% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}.
+    {% else %}
+      Текущих программ с этим занятием нет.
+    {% endif %}
+  </div>
+  {% if result.pinned %}
+    <div class="alert alert-warning py-2">
+      Закреплены вручную в старое время — поправьте в расписании программы:
+      {% for booking in result.pinned %}{{ booking.date|date:"d.m" }} {{ booking.program.room }}п {{ booking.program.surname }}{% if booking.program.department_id != current_department.pk %} ({{ booking.program.department.name }}){% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}.
+    </div>
+  {% endif %}
+{% endif %}

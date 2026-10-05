@@ -1,0 +1,61 @@
+<div id="equipment-table">
+  {% include "scheduling/_rescheduled.html" with result=equipment_result %}
+
+  <table class="table table-sm align-middle">
+    <thead class="table-light">
+      <tr>
+        <th>Тренажёр</th>
+        <th>Окно</th>
+        <th title="Шаг записи, мин">Шаг</th>
+        <th title="Длительность, мин">Мин</th>
+        <th title="Пациентов на одно время (столько ставит подбор)">Мест</th>
+        <th>Действует</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for equipment in equipment_list %}
+        {% if equipment_editing and equipment_editing.pk == equipment.pk %}
+          <tr class="table-warning">
+            <td>
+              {{ equipment.name }}
+              {% for e in equipment_form.non_field_errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </td>
+            <td>
+              <div class="d-flex gap-1">{{ equipment_form.window_start }}{{ equipment_form.window_end }}</div>
+              {% for e in equipment_form.window_end.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </td>
+            <td>{{ equipment_form.step_min }}{% for e in equipment_form.step_min.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</td>
+            <td>{{ equipment_form.duration_min }}{% for e in equipment_form.duration_min.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</td>
+            <td>{{ equipment_form.capacity }}{% for e in equipment_form.capacity.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</td>
+            <td><div class="form-check">{{ equipment_form.is_active }}</div></td>
+            <td class="text-nowrap">
+              <button class="btn btn-sm btn-success"
+                      hx-post="{% url 'scheduling:equipment_edit' equipment.pk %}"
+                      hx-include="closest tr" hx-target="#equipment-table" hx-swap="outerHTML">Сохранить</button>
+              <button class="btn btn-sm btn-link"
+                      hx-get="{% url 'scheduling:group_schedule' %}" hx-select="#equipment-table"
+                      hx-target="#equipment-table" hx-swap="outerHTML">Отмена</button>
+            </td>
+          </tr>
+        {% else %}
+          <tr class="{% if not equipment.is_active %}text-body-secondary{% endif %}">
+            <td>{{ equipment.name }}</td>
+            <td>{{ equipment.window_start|time:"G:i" }}–{{ equipment.window_end|time:"G:i" }}</td>
+            <td>{{ equipment.step_min }}</td>
+            <td>{{ equipment.duration_min }}</td>
+            <td>{{ equipment.capacity }}</td>
+            <td>{% if equipment.is_active %}<i class="bi bi-check-lg text-success" aria-label="да"></i>{% else %}нет{% endif %}</td>
+            <td class="text-end">
+              <button class="btn btn-sm btn-outline-secondary" title="Изменить"
+                      hx-get="{% url 'scheduling:equipment_edit' equipment.pk %}"
+                      hx-target="#equipment-table" hx-swap="outerHTML"><i class="bi bi-pencil"></i></button>
+            </td>
+          </tr>
+        {% endif %}
+      {% empty %}
+        <tr><td colspan="7" class="text-body-secondary">Тренажёров нет.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

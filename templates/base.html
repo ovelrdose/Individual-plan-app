@@ -1,0 +1,25 @@
+{% load static %}<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Программа реабилитации{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'vendor/bootstrap/css/bootstrap.min.css' %}">
+  <link rel="stylesheet" href="{% static 'vendor/bootstrap-icons/bootstrap-icons.min.css' %}">
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  <script src="{% static 'vendor/htmx/htmx.min.js' %}" defer></script>
+  <script src="{% static 'vendor/alpinejs/alpine.min.js' %}" defer></script>
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+  {% block navbar %}
+    {% if user.is_authenticated %}{% include "includes/navbar.html" %}{% endif %}
+  {% endblock %}
+
+  <main class="{% block container_class %}container-fluid px-4{% endblock %} py-3">
+    {% include "includes/messages.html" %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="{% static 'vendor/bootstrap/js/bootstrap.bundle.min.js' %}"></script>
+</body>
+</html>

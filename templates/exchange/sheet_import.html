@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Загрузить лист назначений{% endblock %}
+
+{% block content %}
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'programs:list' %}">Индивидуальные программы</a></li>
+      <li class="breadcrumb-item active" aria-current="page">Загрузить лист назначений</li>
+    </ol>
+  </nav>
+
+  <h1 class="h3 mb-3">Новая программа из листа назначений</h1>
+
+  <div class="row">
+    <div class="col-6">
+      <form method="post" enctype="multipart/form-data" novalidate class="card">
+        <div class="card-body">
+          {% csrf_token %}
+          {% for error in form.non_field_errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+          {% include "includes/form_field.html" with field=form.file %}
+          {% include "includes/form_field.html" with field=form.department %}
+          {% if form.attending_doctor %}
+            {% include "includes/form_field.html" with field=form.attending_doctor %}
+          {% endif %}
+          <button type="submit" class="btn btn-success"><i class="bi bi-upload"></i> Загрузить и создать программу</button>
+          <a href="{% url 'programs:list' %}" class="btn btn-link">Отмена</a>
+        </div>
+      </form>
+    </div>
+    <div class="col-6 text-body-secondary small">
+      <p class="mb-2">Загрузите ваш обычный лист назначений в формате Word (.docx). Из него берутся:</p>
+      <ul>
+        <li>ФИО, ИБ, ШРМ, диагноз и палата — из шапки;</li>
+        <li>назначения и даты — из колонки «Физиотерапия»;</li>
+        <li>консультации психолога, логопеда и эрготерапевта — из колонки «Диагностические назначения».</li>
+      </ul>
+      <p class="mb-0">Программа создастся сразу. Всё, что нужно проверить, будет показано на её странице —
+        там же можно поправить назначения без повторной загрузки файла. Сам файл не сохраняется.</p>
+    </div>
+  </div>
+{% endblock %}

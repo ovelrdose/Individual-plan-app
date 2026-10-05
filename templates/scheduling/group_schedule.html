@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Расписание групп{% endblock %}
+
+{% block content %}
+  <h1 class="h3">Расписание групп</h1>
+  <p class="text-body-secondary">
+    Занятия групп ЛФК и бассейна одинаковы каждый день. После сохранения расписание текущих программ
+    с этой группой или тренажёром пересобирается сразу; занятия, закреплённые вручную, не меняются.
+    Новые группы и тренажёры заводятся в справочниках.
+  </p>
+
+  <div class="row g-4">
+    <div class="col-xl-7">
+      <h2 class="h5">Группы ЛФК и бассейн</h2>
+      {% include "scheduling/_group_sessions.html" %}
+    </div>
+    <div class="col-xl-5">
+      <h2 class="h5">Тренажёры</h2>
+      {% include "scheduling/_equipment.html" %}
+    </div>
+  </div>
+{% endblock %}

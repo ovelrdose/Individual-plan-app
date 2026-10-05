@@ -1,0 +1,90 @@
+{# Постоянный распорядок инструктора (TZ.md, FR-STF-5). Действия возвращают фрагмент целиком. #}
+<div id="duties">
+  {% include "scheduling/_rebuild_notice.html" %}
+  <table class="table table-sm align-middle">
+    <thead class="table-light">
+      <tr>
+        <th style="width: 7rem">Слот</th>
+        <th>Вид</th>
+        <th>Группа / подпись</th>
+        <th>Период</th>
+        <th style="width: 15rem"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for duty in duties %}
+        {% if editing and editing.pk == duty.pk %}
+          <tr class="table-warning">
+            <td colspan="5">
+              <form hx-post="{% url 'staff:duty_edit' duty.pk %}" hx-target="#duties" hx-swap="outerHTML"
+                    x-data="{ kind: '{{ edit_form.kind.value|default:''|escapejs }}' }">
+                {% for e in edit_form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
+                <div class="row g-2 align-items-start">
+                  <div class="col-2">{% include "includes/form_field.html" with field=edit_form.slot wrapper_class="mb-0" %}</div>
+                  <div class="col-3">{% include "includes/form_field.html" with field=edit_form.kind wrapper_class="mb-0" %}</div>
+                  {% include "staff/_duty_kind_fields.html" with form=edit_form %}
+                  <div class="col-2">{% include "includes/form_field.html" with field=edit_form.valid_from wrapper_class="mb-0" %}</div>
+                  <div class="col-2">{% include "includes/form_field.html" with field=edit_form.valid_to wrapper_class="mb-0" %}</div>
+                </div>
+                <div class="mt-2">
+                  <button type="submit" class="btn btn-sm btn-success">Сохранить</button>
+                  <button type="button" class="btn btn-sm btn-link"
+                          hx-get="{% url 'staff:duties' %}?instructor={{ selected.pk }}" hx-select="#duties"
+                          hx-target="#duties" hx-swap="outerHTML">Отмена</button>
+                </div>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          {% with ended=duty.valid_to %}
+          <tr class="{% if ended and ended < today %}text-body-secondary{% endif %}">
+            <td class="fw-semibold">{{ duty.slot.start|time:"G:i" }}–{{ duty.slot.end|time:"G:i" }}</td>
+            <td>{{ duty.get_kind_display }}</td>
+            <td>{{ duty.display_label|default:"—" }}</td>
+            <td class="small">
+              {{ duty.period_text }}
+              {% if ended and ended < today %}<span class="badge text-bg-secondary">завершена</span>{% endif %}
+            </td>
+            <td class="text-end text-nowrap">
+              {% if not ended or ended >= today %}
+                <form class="d-inline-flex gap-1" hx-post="{% url 'staff:duty_end' duty.pk %}"
+                      hx-target="#duties" hx-swap="outerHTML">
+                  <input type="date" name="end{{ duty.pk }}-valid_to" class="form-control form-control-sm"
+                         value="{{ today|date:'Y-m-d' }}" aria-label="Последний день" style="width: 9rem">
+                  <button type="submit" class="btn btn-sm btn-outline-danger" title="Завершить: последний день действия">Завершить</button>
+                </form>
+              {% endif %}
+              <button class="btn btn-sm btn-outline-secondary" title="Изменить"
+                      hx-get="{% url 'staff:duty_edit' duty.pk %}"
+                      hx-target="#duties" hx-swap="outerHTML"><i class="bi bi-pencil"></i></button>
+              {% if end_for and end_for.pk == duty.pk and end_error %}
+                <div class="text-danger small text-start">{{ end_error }}</div>
+              {% endif %}
+            </td>
+          </tr>
+          {% endwith %}
+        {% endif %}
+      {% empty %}
+        <tr><td colspan="5" class="text-body-secondary">Распорядка нет — все слоты свободны для пациентов.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if add_form %}
+    <form class="card" hx-post="{% url 'staff:duty_add' selected.pk %}" hx-target="#duties" hx-swap="outerHTML"
+          x-data="{ kind: '{{ add_form.kind.value|default:''|escapejs }}' }">
+      <div class="card-body">
+        <h3 class="h6">Добавить обязанность</h3>
+        {% for e in add_form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
+        <div class="row g-2 align-items-start">
+          <div class="col-2">{% include "includes/form_field.html" with field=add_form.slot wrapper_class="mb-0" %}</div>
+          <div class="col-3">{% include "includes/form_field.html" with field=add_form.kind wrapper_class="mb-0" %}</div>
+          {% include "staff/_duty_kind_fields.html" with form=add_form %}
+          <div class="col-2">{% include "includes/form_field.html" with field=add_form.valid_from wrapper_class="mb-0" %}</div>
+          <div class="col-2">{% include "includes/form_field.html" with field=add_form.valid_to wrapper_class="mb-0" %}</div>
+        </div>
+        <button type="submit" class="btn btn-success mt-2">Добавить</button>
+      </div>
+    </form>
+  {% endif %}
+</div>

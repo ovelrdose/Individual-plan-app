@@ -1,0 +1,90 @@
+{# Календарь смен на месяц (TZ.md, FR-STF-4). Любое действие возвращает фрагмент целиком. #}
+<div id="shift-calendar">
+  {% include "scheduling/_rebuild_notice.html" %}
+  <div class="d-flex align-items-center gap-2 mb-2">
+    <a class="btn btn-sm btn-outline-secondary" href="?month={{ previous_month }}" title="Предыдущий месяц"
+       hx-get="{% url 'staff:shifts' %}?month={{ previous_month }}" hx-select="#shift-calendar"
+       hx-target="#shift-calendar" hx-swap="outerHTML" hx-push-url="true"><i class="bi bi-chevron-left"></i></a>
+    <h2 class="h5 mb-0 px-2" style="min-width: 11rem">{{ month_title }}</h2>
+    <a class="btn btn-sm btn-outline-secondary" href="?month={{ next_month }}" title="Следующий месяц"
+       hx-get="{% url 'staff:shifts' %}?month={{ next_month }}" hx-select="#shift-calendar"
+       hx-target="#shift-calendar" hx-swap="outerHTML" hx-push-url="true"><i class="bi bi-chevron-right"></i></a>
+    <span class="ms-3 small text-body-secondary">
+      <span class="shift-cell shift-on d-inline-block">Р</span> рабочий
+      <span class="shift-cell d-inline-block ms-2">&nbsp;</span> выходной
+      <span class="shift-cell shift-on shift-exception d-inline-block ms-2">Р</span>
+      <span class="shift-cell shift-exception d-inline-block">&nbsp;</span> исключение
+    </span>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-sm table-bordered align-middle shift-table">
+      <thead class="table-light">
+        <tr>
+          <th>Инструктор</th>
+          <th>Шаблон</th>
+          {% for day in days %}
+            <th class="text-center {% if day.weekday >= 5 %}table-secondary{% endif %} {% if day == today %}border-primary border-2{% endif %}">
+              {{ day.day }}<br><span class="fw-normal small">{{ day|date:"D"|slice:":2" }}</span>
+            </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <th class="text-nowrap {% if row.instructor.partner_id %}text-primary{% endif %}"
+                {% if row.instructor.partner_id %}title="Пара 2/2: {{ row.instructor.team_label }}"{% endif %}>
+              {{ row.instructor.short_name }}
+            </th>
+            <td class="text-nowrap small">
+              {% if row.pattern %}
+                {{ row.pattern.get_pattern_display }}
+                <span class="text-body-secondary">с {{ row.pattern.valid_from|date:"d.m.Y" }}</span>
+              {% else %}
+                <span class="text-danger">не задан</span>
+              {% endif %}
+              <button class="btn btn-sm btn-link p-0 ms-1" title="Задать или сменить шаблон"
+                      hx-get="{% url 'staff:shift_pattern' row.instructor.pk %}?month={{ month_value }}"
+                      hx-target="#shift-calendar" hx-swap="outerHTML"><i class="bi bi-pencil"></i></button>
+            </td>
+            {% for cell in row.cells %}
+              <td class="p-0 text-center {% if cell.day.weekday >= 5 %}table-secondary{% endif %}">
+                <button type="button"
+                        class="shift-cell {% if cell.working %}shift-on{% endif %} {% if cell.exception %}shift-exception{% endif %}"
+                        title="{{ row.instructor.short_name }}, {{ cell.day|date:'d.m.Y' }}: {% if cell.working %}рабочий{% else %}выходной{% endif %}{% if cell.exception %} (исключение){% endif %}"
+                        hx-post="{% url 'staff:shift_toggle' row.instructor.pk %}" hx-disabled-elt="this" hx-sync="closest table:drop"
+                        hx-vals='{"day": "{{ cell.day|date:"Y-m-d" }}", "month": "{{ month_value }}"}'
+                        hx-target="#shift-calendar" hx-swap="outerHTML">{% if cell.working %}Р{% else %}&nbsp;{% endif %}</button>
+              </td>
+            {% endfor %}
+          </tr>
+          {% if pattern_for and pattern_for.pk == row.instructor.pk %}
+            <tr class="table-warning">
+              <td colspan="{{ days|length|add:2 }}">
+                <form class="row g-2 align-items-end" hx-post="{% url 'staff:shift_pattern' row.instructor.pk %}"
+                      hx-target="#shift-calendar" hx-swap="outerHTML">
+                  <input type="hidden" name="month" value="{{ month_value }}">
+                  <div class="col-12 fw-semibold">Шаблон смены: {{ row.instructor.short_name }}</div>
+                  {% for e in pattern_form.non_field_errors %}<div class="col-12"><div class="alert alert-danger py-2 mb-0">{{ e }}</div></div>{% endfor %}
+                  <div class="col-2">{% include "includes/form_field.html" with field=pattern_form.pattern wrapper_class="mb-0" %}</div>
+                  <div class="col-3">{% include "includes/form_field.html" with field=pattern_form.anchor_date wrapper_class="mb-0" %}</div>
+                  <div class="col-2">{% include "includes/form_field.html" with field=pattern_form.valid_from wrapper_class="mb-0" %}</div>
+                  <div class="col-3">
+                    <button type="submit" class="btn btn-success">Сохранить</button>
+                    <button type="button" class="btn btn-link"
+                            hx-get="{% url 'staff:shifts' %}?month={{ month_value }}" hx-select="#shift-calendar"
+                            hx-target="#shift-calendar" hx-swap="outerHTML">Отмена</button>
+                  </div>
+                  <div class="col-12 form-text">Прежний шаблон закончится накануне этой даты.</div>
+                </form>
+              </td>
+            </tr>
+          {% endif %}
+        {% empty %}
+          <tr><td colspan="{{ days|length|add:2 }}" class="text-body-secondary">Действующих инструкторов нет — они заводятся в справочниках.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

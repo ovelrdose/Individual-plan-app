@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'programs:list' %}">Индивидуальные программы</a></li>
+      {% if program.pk %}
+        <li class="breadcrumb-item"><a href="{% url 'programs:detail' program.pk %}">{{ program.full_name }}</a></li>
+      {% endif %}
+      <li class="breadcrumb-item active" aria-current="page">{{ title }}</li>
+    </ol>
+  </nav>
+
+  <h1 class="h3 mb-3">{{ title }}</h1>
+
+  <form method="post" novalidate style="max-width: 52rem">
+    {% csrf_token %}
+    {% for error in form.non_field_errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+
+    <div class="row">
+      <div class="col-8">{% include "includes/form_field.html" with field=form.full_name %}</div>
+      <div class="col-2">{% include "includes/form_field.html" with field=form.sex %}</div>
+      <div class="col-2">{% include "includes/form_field.html" with field=form.age %}</div>
+    </div>
+    <div class="row">
+      <div class="col-3">{% include "includes/form_field.html" with field=form.room %}</div>
+      <div class="col-2">{% include "includes/form_field.html" with field=form.shrm %}</div>
+      <div class="col-3">{% include "includes/form_field.html" with field=form.history_number %}</div>
+      <div class="col-4">{% include "includes/form_field.html" with field=form.attending_doctor %}</div>
+    </div>
+    {% include "includes/form_field.html" with field=form.diagnosis %}
+    <div class="row">
+      <div class="col-4">{% include "includes/form_field.html" with field=form.start_date %}</div>
+      <div class="col-8">{% include "includes/form_field.html" with field=form.end_date %}</div>
+    </div>
+
+    <button type="submit" class="btn btn-success">Сохранить</button>
+    <a href="{% if program.pk %}{% url 'programs:detail' program.pk %}{% else %}{% url 'programs:list' %}{% endif %}"
+       class="btn btn-link">Отмена</a>
+  </form>
+{% endblock %}

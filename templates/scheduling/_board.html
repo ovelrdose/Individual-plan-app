@@ -1,0 +1,102 @@
+{# Шахматка на дату (FR-SCH-14): слева инструкторы по слотам, справа тренажёры. #}
+<div id="board"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="d-flex gap-4 align-items-start">
+    <div class="board-scroll flex-grow-1">
+      {% if board.columns %}
+        <table class="table table-bordered table-sm board-table mb-2">
+          <thead>
+            <tr>
+              <th class="board-time">Время</th>
+              {% for column in board.columns %}
+                <th>
+                  {{ column.label }}
+                  {% if board.can_edit %}
+                    {% for person in column.instructors %}
+                      <form method="post" action="{% url 'scheduling:board_off' %}" class="d-inline"
+                            onsubmit="return confirm('{{ person.short_name|escapejs }} {{ board.day|date:'d.m' }} не работает? Его индивидуальные занятия будут переставлены.')">
+                        {% csrf_token %}
+                        <input type="hidden" name="instructor" value="{{ person.pk }}">
+                        <input type="hidden" name="date" value="{{ board.day|date:'Y-m-d' }}">
+                        <button type="submit" class="btn btn-link btn-sm p-0 board-edit" title="{{ person.short_name }} не работает в этот день"
+                                aria-label="{{ person.short_name }} не работает в этот день"><i class="bi bi-person-x"></i></button>
+                      </form>
+                    {% endfor %}
+                  {% endif %}
+                </th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for slot, cells in board.rows %}
+              <tr{% if slot.is_evening %} class="board-evening"{% endif %}>
+                <th class="board-time">{{ slot.start|time:"G:i" }}–{{ slot.end|time:"G:i" }}</th>
+                {% for cell in cells %}
+                  <td class="{% if not cell.seats %}board-off{% endif %}">
+                    {% for seat in cell.seats %}
+                      <div class="board-seat{% if seat.busy %} board-busy{% endif %}">
+                        {% if cell.seats|length > 1 %}<span class="text-body-secondary small">{{ seat.instructor.short_name }}:</span>{% endif %}
+                        {% if seat.booking %}
+                          {% if seat.program_id %}<a href="{% url 'programs:detail' seat.program_id %}">{{ seat.patient }}</a>{% else %}{{ seat.patient }}{% endif %}
+                          {% if seat.booking.pinned %}<i class="bi bi-pin-angle" title="Поставлено вручную"></i>{% endif %}
+                        {% elif seat.busy %}
+                          {{ seat.busy.text }}
+                        {% endif %}
+                        {% if board.can_edit %}
+                          <button type="button" class="btn btn-link btn-sm p-0 ms-auto board-edit"
+                                  hx-get="{% url 'scheduling:board_cell' %}?date={{ board.day|date:'Y-m-d' }}&instructor={{ seat.instructor.pk }}&slot={{ cell.slot.pk }}"
+                                  hx-target="#cell-panel" hx-swap="outerHTML"
+                                  title="Изменить ячейку {{ seat.instructor.short_name }} {{ cell.slot.start|time:'G:i' }}"
+                                  aria-label="Изменить ячейку {{ seat.instructor.short_name }} {{ cell.slot.start|time:'G:i' }}">
+                            <i class="bi bi-pencil"></i>
+                          </button>
+                        {% endif %}
+                      </div>
+                    {% endfor %}
+                  </td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="alert alert-secondary">В этот день нет инструкторов в смене.</div>
+      {% endif %}
+
+      {% if board.weekend_individuals %}
+        <h2 class="h6 mt-3">Индивидуальные без инструктора (ведёт дежурный)</h2>
+        <ul class="list-unstyled small">
+          {% for start, label, program_id in board.weekend_individuals %}
+            <li>{{ start|time:"G:i" }} — {% if program_id %}<a href="{% url 'programs:detail' program_id %}">{{ label }}</a>{% else %}{{ label }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </div>
+
+    {% if board.equipment %}
+      <div>
+        <table class="table table-bordered table-sm board-table">
+          <thead>
+            <tr>
+              <th class="board-time">Время</th>
+              {% for item in board.equipment %}
+                <th>{{ item.name }} <span class="fw-normal text-body-secondary small" title="Вместимость">({{ item.capacity }})</span></th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in board.equipment_rows %}
+              <tr{% if not row.in_window %} class="board-evening" title="Запись вне окна тренажёра"{% endif %}>
+                <th class="board-time">{{ row.start|time:"G:i" }}</th>
+                {% for names, over in row.cells %}
+                  <td{% if over %} class="table-warning" title="Сверх вместимости"{% endif %}>
+                    {% for name in names %}<div>{{ name }}</div>{% endfor %}
+                  </td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </div>
+</div>

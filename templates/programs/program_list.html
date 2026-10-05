@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}Индивидуальные программы — {{ current_department.name }}{% endblock %}
+
+{% block content %}
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <h1 class="h3 mb-0">Индивидуальные программы</h1>
+    {% if can_create %}
+      <a href="{% url 'exchange:sheet_import' %}" class="btn btn-success ms-auto">
+        <i class="bi bi-file-earmark-arrow-up"></i> Загрузить лист назначений
+      </a>
+      <a href="{% url 'programs:create' %}" class="btn btn-outline-secondary">Создать вручную</a>
+    {% endif %}
+  </div>
+
+  <form method="get" class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <div class="btn-group" role="group" aria-label="Период">
+      {% for value, label in periods %}
+        <a href="?period={{ value }}{% if query %}&q={{ query|urlencode }}{% endif %}"
+           class="btn btn-outline-secondary{% if period == value %} active{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+    <input type="hidden" name="period" value="{{ period }}">
+    <label for="search" class="visually-hidden">Поиск</label>
+    <input type="search" id="search" name="q" value="{{ query }}" class="form-control"
+           placeholder="ФИО или № ИБ" style="width: 20rem">
+    <button type="submit" class="btn btn-outline-secondary">Найти</button>
+  </form>
+
+  {% if programs %}
+    <table class="table table-hover align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Палата</th>
+          <th>ФИО</th>
+          <th>ШРМ</th>
+          <th>Курс</th>
+          <th>Лечащий врач</th>
+          <th>Состояние</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for program in programs %}
+          <tr>
+            <td>{{ program.room }}</td>
+            <td><a href="{% url 'programs:detail' program.pk %}" class="fw-semibold">{{ program.full_name }}</a></td>
+            <td>{{ program.shrm }}</td>
+            <td class="text-nowrap">{{ program.start_date|date:"d.m.Y" }} – {{ program.end_date|date:"d.m.Y" }}</td>
+            <td>{{ program.attending_doctor }}</td>
+            <td>
+              {% if program.import_warnings or program.unrecognized_count %}
+                <span class="badge text-bg-warning">требует проверки</span>
+              {% endif %}
+              {% if program.has_schedule_conflicts %}
+                <span class="badge text-bg-danger">конфликты расписания</span>
+              {% elif program.booking_count %}
+                <span class="badge text-bg-success">расписание составлено</span>
+              {% elif program.schedulable_count %}
+                <span class="badge text-bg-secondary">расписание не составлено</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="text-body-secondary">
+      {% if query %}Ничего не нашли по запросу «{{ query }}».{% else %}Программ нет.{% endif %}
+    </p>
+  {% endif %}
+{% endblock %}

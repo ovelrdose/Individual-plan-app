@@ -1,0 +1,39 @@
+/* Свои стили поверх Bootstrap. Держим минимум — по возможности классы Bootstrap. */
+
+body {
+  min-width: 1280px; /* десктоп от 1280 px (TZ.md §1.3) */
+}
+
+/* Календарь смен (FR-STF-4): ячейка — кнопка «рабочий / выходной», исключение — в рамке. */
+.shift-table th, .shift-table td { font-size: .85rem; }
+.shift-cell {
+  width: 1.8rem;
+  height: 1.8rem;
+  line-height: 1.6rem;
+  border: 2px solid transparent;
+  background: transparent;
+  text-align: center;
+  font-weight: 600;
+  padding: 0;
+}
+.shift-cell.shift-on { background: var(--bs-success-bg-subtle); color: var(--bs-success-text-emphasis); }
+.shift-cell.shift-exception { border-color: var(--bs-danger); }
+
+/* Alpine: скрытое x-show не мелькает до инициализации. */
+[x-cloak] { display: none !important; }
+
+/* Шахматка (FR-SCH-14): как бумажная — фиксированные заголовок и колонка времени, блоки серым. */
+.board-scroll { overflow: auto; max-height: calc(100vh - 12rem); }
+.board-table { font-size: .85rem; }
+.board-table th, .board-table td { white-space: nowrap; vertical-align: top; min-width: 7rem; }
+.board-table thead th { position: sticky; top: 0; z-index: 2; background: var(--bs-body-bg); }
+.board-table .board-time { position: sticky; left: 0; z-index: 1; background: var(--bs-body-bg); min-width: 6rem; }
+.board-table thead .board-time { z-index: 3; }
+.board-seat { display: flex; align-items: center; gap: .25rem; }
+.board-busy { color: var(--bs-secondary-color); }
+.board-table td:has(.board-busy) { background: var(--bs-secondary-bg); }
+.board-off { background: var(--bs-tertiary-bg); }
+.board-evening th, .board-evening td { border-top-style: dashed; }
+.board-edit { opacity: .35; }
+.board-seat:hover .board-edit, .board-edit:focus { opacity: 1; }
+.board-panel { position: fixed; right: 1rem; bottom: 1rem; width: 24rem; z-index: 1050; }

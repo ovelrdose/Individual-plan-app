@@ -1,0 +1,13 @@
+{# Подсказки для выбора процедуры. Клик передаёт выбор в Alpine-состояние формы назначения. #}
+{% for procedure in procedures %}
+  <button type="button" class="list-group-item list-group-item-action d-flex justify-content-between"
+          data-id="{{ procedure.pk }}" data-label="{{ procedure.name }}"
+          data-duration="{{ procedure.default_duration_min|default_if_none:'' }}"
+          @click="id = $el.dataset.id; label = $el.dataset.label; open = false;
+                  if ($el.dataset.duration) $refs.duration.value = $el.dataset.duration">
+    <span>{{ procedure.name }}</span>
+    <small class="text-body-secondary">{{ procedure.get_kind_display }}</small>
+  </button>
+{% empty %}
+  <div class="list-group-item text-body-secondary">Ничего не нашли. Проверьте справочник процедур.</div>
+{% endfor %}

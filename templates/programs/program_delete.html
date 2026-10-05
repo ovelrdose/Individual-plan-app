@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}Удалить программу{% endblock %}
+
+{% block content %}
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'programs:list' %}">Индивидуальные программы</a></li>
+      <li class="breadcrumb-item"><a href="{% url 'programs:detail' program.pk %}">{{ program.full_name }}</a></li>
+      <li class="breadcrumb-item active" aria-current="page">Удаление</li>
+    </ol>
+  </nav>
+
+  <div class="card border-danger" style="max-width: 40rem">
+    <div class="card-body">
+      <h1 class="h4 text-danger">Удалить программу?</h1>
+      <p>
+        <strong>{{ program.full_name }}</strong>, {{ program.department.name }}, палата {{ program.room }},
+        курс {{ program.start_date|date:"d.m.Y" }} – {{ program.end_date|date:"d.m.Y" }}.
+      </p>
+      <p class="mb-3">Вместе с программой удалятся назначения ({{ prescription_count }}) и расписание
+        (занятий: {{ booking_count }}). Восстановить программу из системы нельзя — только загрузить лист заново.</p>
+      <form method="post" class="d-flex gap-2">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-danger">Удалить навсегда</button>
+        <a href="{% url 'programs:detail' program.pk %}" class="btn btn-link">Отмена</a>
+      </form>
+    </div>
+  </div>
+{% endblock %}

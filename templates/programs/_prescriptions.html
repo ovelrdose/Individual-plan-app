@@ -1,0 +1,127 @@
+{# Таблица назначений. Каждое действие (HTMX) возвращает этот фрагмент целиком. #}
+<div id="prescriptions">
+  {% include "includes/messages.html" %}
+
+  <table class="table align-middle">
+    <thead class="table-light">
+      <tr>
+        <th style="width: 3rem">№</th>
+        <th>Процедура</th>
+        <th style="width: 7rem">Мин</th>
+        <th style="width: 7rem">Раз в день</th>
+        <th style="width: 10rem">С даты</th>
+        <th style="width: 10rem">Отменено с</th>
+        <th style="width: 6rem">В карту</th>
+        {% if can_edit %}<th style="width: 11rem"></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for prescription in prescriptions %}
+        {% if can_edit and editing and editing.pk == prescription.pk %}
+          <tr class="table-warning">
+            <td>{{ forloop.counter }}</td>
+            <td>
+              {{ edit_form.procedure }}
+              {% for error in edit_form.procedure.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+              {% if prescription.raw_text %}<div class="small text-body-secondary mt-1">Из листа: {{ prescription.raw_text|truncatechars:90 }}</div>{% endif %}
+              {% for error in edit_form.non_field_errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+            </td>
+            {% for field in edit_form %}{% if field.name != "procedure" %}
+              <td>
+                {% if field.name == "in_card" %}<div class="form-check">{{ field }}</div>{% else %}{{ field }}{% endif %}
+                {% for error in field.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+              </td>
+            {% endif %}{% endfor %}
+            <td class="text-nowrap">
+              <button class="btn btn-sm btn-success"
+                      hx-post="{% url 'programs:prescription_edit' program.pk prescription.pk %}"
+                      hx-include="closest tr" hx-target="#prescriptions" hx-swap="outerHTML">Сохранить</button>
+              <button class="btn btn-sm btn-link"
+                      hx-get="{% url 'programs:detail' program.pk %}" hx-select="#prescriptions"
+                      hx-target="#prescriptions" hx-swap="outerHTML">Отмена</button>
+            </td>
+          </tr>
+        {% else %}
+          <tr class="{% if not prescription.procedure %}table-warning{% elif not prescription.in_card %}text-body-secondary{% endif %}">
+            <td>{{ forloop.counter }}</td>
+            <td>
+              {{ prescription.label }}
+              {% if prescription.procedure %}
+                <span class="badge text-bg-light border">{{ prescription.procedure.get_kind_display }}</span>
+              {% else %}
+                <span class="badge text-bg-warning">не распознано</span>
+                {% if can_edit %}
+                  <button class="btn btn-sm btn-warning ms-1"
+                          hx-get="{% url 'programs:prescription_edit' program.pk prescription.pk %}"
+                          hx-target="#prescriptions" hx-swap="outerHTML">Выбрать процедуру</button>
+                {% endif %}
+              {% endif %}
+              {% if prescription.raw_text and prescription.procedure %}
+                <div class="small text-body-secondary">{{ prescription.raw_text|truncatechars:90 }}</div>
+              {% endif %}
+            </td>
+            <td>{{ prescription.duration_min|default:"—" }}</td>
+            <td>{{ prescription.per_day }}</td>
+            <td>{{ prescription.start_date|date:"d.m.Y"|default:"с начала курса" }}</td>
+            <td>{{ prescription.cancel_date|date:"d.m.Y"|default:"—" }}</td>
+            <td>{% if prescription.in_card %}<i class="bi bi-check-lg text-success" aria-label="да"></i>{% else %}нет{% endif %}</td>
+            {% if can_edit %}
+              <td class="text-nowrap text-end">
+                <button class="btn btn-sm btn-outline-secondary" title="Выше" {% if forloop.first %}disabled{% endif %}
+                        hx-post="{% url 'programs:prescription_move' program.pk prescription.pk 'up' %}"
+                        hx-target="#prescriptions" hx-swap="outerHTML"><i class="bi bi-arrow-up"></i></button>
+                <button class="btn btn-sm btn-outline-secondary" title="Ниже" {% if forloop.last %}disabled{% endif %}
+                        hx-post="{% url 'programs:prescription_move' program.pk prescription.pk 'down' %}"
+                        hx-target="#prescriptions" hx-swap="outerHTML"><i class="bi bi-arrow-down"></i></button>
+                <button class="btn btn-sm btn-outline-secondary" title="Изменить"
+                        hx-get="{% url 'programs:prescription_edit' program.pk prescription.pk %}"
+                        hx-target="#prescriptions" hx-swap="outerHTML"><i class="bi bi-pencil"></i></button>
+                <button class="btn btn-sm btn-outline-danger" title="Удалить"
+                        hx-post="{% url 'programs:prescription_delete' program.pk prescription.pk %}"
+                        hx-confirm="Удалить назначение «{{ prescription.label }}»?"
+                        hx-target="#prescriptions" hx-swap="outerHTML"><i class="bi bi-trash"></i></button>
+              </td>
+            {% endif %}
+          </tr>
+        {% endif %}
+      {% empty %}
+        <tr><td colspan="8" class="text-body-secondary">Назначений пока нет.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if add_form %}
+    <form class="card" hx-post="{% url 'programs:prescription_add' program.pk %}"
+          hx-target="#prescriptions" hx-swap="outerHTML"
+          x-data="{ id: '{{ add_form.procedure.value|default_if_none:''|escapejs }}', label: '{{ add_form.procedure_label|escapejs }}', open: false }">
+      <div class="card-body">
+        <h3 class="h6">Добавить назначение</h3>
+        {% for error in add_form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}
+        <div class="row g-2 align-items-start">
+          <div class="col-4 position-relative">
+            <label class="form-label" for="procedure-search">Процедура <span class="text-danger">*</span></label>
+            <input type="hidden" name="procedure" :value="id">
+            <div x-show="id && label" class="input-group">
+              <span class="form-control bg-success-subtle" x-text="label"></span>
+              <button type="button" class="btn btn-outline-secondary" @click="id = ''; label = ''; $nextTick(() => $refs.search.focus())"
+                      title="Выбрать другую"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <input type="search" id="procedure-search" name="q" class="form-control" x-ref="search"
+                   x-show="!(id && label)" placeholder="Название или синоним, например «st150»" autocomplete="off"
+                   hx-get="{% url 'catalog:procedure_search' %}?department={{ program.department_id }}" hx-trigger="input changed delay:250ms, focus"
+                   hx-target="#procedure-results" @focus="open = true">
+            <div id="procedure-results" class="list-group position-absolute w-100 shadow-sm" style="z-index: 10"
+                 x-show="open && !(id && label)" @click.outside="open = false"></div>
+            {% for error in add_form.procedure.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+          </div>
+          <div class="col-1">{% include "includes/form_field.html" with field=add_form.duration_min wrapper_class="mb-0" %}</div>
+          <div class="col-1">{% include "includes/form_field.html" with field=add_form.per_day wrapper_class="mb-0" %}</div>
+          <div class="col-2">{% include "includes/form_field.html" with field=add_form.start_date wrapper_class="mb-0" %}</div>
+          <div class="col-2">{% include "includes/form_field.html" with field=add_form.cancel_date wrapper_class="mb-0" %}</div>
+          <div class="col-1 pt-4">{% include "includes/form_field.html" with field=add_form.in_card wrapper_class="mb-0 mt-2" %}</div>
+          <div class="col-1 pt-4"><button type="submit" class="btn btn-success mt-1">Добавить</button></div>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+</div>

@@ -1,0 +1,8 @@
+<div id="cell-panel" class="card shadow board-panel">
+  <div class="card-body py-2 d-flex align-items-center gap-2">
+    <span class="text-success"><i class="bi bi-check-circle"></i> {{ done }}</span>
+    <button type="button" class="btn-close ms-auto" aria-label="Закрыть"
+            onclick="const p = this.closest('#cell-panel'); p.replaceChildren(); p.className = ''"></button>
+  </div>
+</div>
+{% include "scheduling/_board.html" with oob=True %}

@@ -1,0 +1,4 @@
+<select name="{{ name }}" class="form-select form-select-sm {% if compact %}d-inline-block w-auto{% else %}mb-2{% endif %}" aria-label="Область действия">
+  <option value="one"{% if posted.scope != "following" %} selected{% endif %}>только эта дата</option>
+  <option value="following"{% if posted.scope == "following" %} selected{% endif %}>эта и все следующие</option>
+</select>

@@ -1,0 +1,19 @@
+<div id="booking-panel" class="card shadow board-panel">
+  <div class="card-body py-2">
+    <div class="d-flex align-items-center gap-2">
+      {% if error %}
+        <span class="text-danger"><i class="bi bi-x-circle"></i> {{ error }}</span>
+      {% else %}
+        <span class="text-success"><i class="bi bi-check-circle"></i> {{ done }}</span>
+      {% endif %}
+      <button type="button" class="btn-close ms-auto" aria-label="Закрыть"
+              onclick="const p = this.closest('#booking-panel'); p.replaceChildren(); p.className = ''"></button>
+    </div>
+    {% if skipped %}
+      <div class="small mt-1">Пропущены даты:
+        <ul class="mb-0 ps-3">{% for day, reason in skipped %}<li>{{ day|date:"d.m" }} — {{ reason }}</li>{% endfor %}</ul>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% include "scheduling/_schedule.html" with oob=True %}

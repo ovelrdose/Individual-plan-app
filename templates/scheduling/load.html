@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Загрузка инструкторов{% endblock %}
+
+{% block content %}
+  <h1 class="h3">Загрузка инструкторов</h1>
+  <form method="get" class="d-flex align-items-end gap-2 mb-3">
+    <div><label for="load-start" class="form-label small mb-0">с</label>
+      <input id="load-start" type="date" name="start" value="{{ report.start|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
+    <div><label for="load-end" class="form-label small mb-0">по</label>
+      <input id="load-end" type="date" name="end" value="{{ report.end|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
+    <button type="submit" class="btn btn-sm btn-outline-primary">Показать</button>
+  </form>
+  <p class="text-body-secondary small">Индивидуальные занятия и рабочие дни — по будням: в выходные индивидуальные
+    ведут дежурные 2/2 без шахматки. Для пары 2/2 — строка суммы.</p>
+  <table class="table table-sm align-middle" style="max-width: 40rem">
+    <thead class="table-light">
+      <tr><th>Инструктор</th><th class="text-end">Занятий</th><th class="text-end">Рабочих дней</th><th class="text-end">В среднем в день</th></tr>
+    </thead>
+    <tbody>
+      {% for row in report.rows %}
+        <tr{% if row.is_total %} class="fw-semibold table-light"{% endif %}>
+          <td>{% if row.is_total %}{{ row.name }} — вместе{% else %}{{ row.name }}{% endif %}</td>
+          <td class="text-end">{{ row.sessions }}</td>
+          <td class="text-end">{{ row.days }}</td>
+          <td class="text-end">{% if row.average is not None %}{{ row.average|floatformat:1 }}{% else %}—{% endif %}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}

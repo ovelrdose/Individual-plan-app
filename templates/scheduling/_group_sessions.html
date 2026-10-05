@@ -1,0 +1,75 @@
+<div id="group-sessions">
+  {% include "scheduling/_rescheduled.html" with result=sessions_result %}
+
+  <table class="table table-sm align-middle">
+    <thead class="table-light">
+      <tr>
+        <th style="width: 7rem">Начало</th>
+        <th>Группа</th>
+        <th style="width: 7rem">Мин</th>
+        <th>Место</th>
+        <th style="width: 6rem">Действует</th>
+        <th style="width: 9rem"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for session in sessions %}
+        {% if editing and editing.pk == session.pk %}
+          <tr class="table-warning">
+            <td>{{ edit_form.start_time }}{% for e in edit_form.start_time.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</td>
+            <td>
+              {{ edit_form.procedure }}
+              {% for e in edit_form.procedure.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+              {% for e in edit_form.non_field_errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </td>
+            <td>{{ edit_form.duration_min }}{% for e in edit_form.duration_min.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</td>
+            <td>{{ edit_form.place }}</td>
+            <td><div class="form-check">{{ edit_form.is_active }}</div></td>
+            <td class="text-nowrap">
+              <button class="btn btn-sm btn-success"
+                      hx-post="{% url 'scheduling:session_edit' session.pk %}"
+                      hx-include="closest tr" hx-target="#group-sessions" hx-swap="outerHTML">Сохранить</button>
+              <button class="btn btn-sm btn-link"
+                      hx-get="{% url 'scheduling:group_schedule' %}" hx-select="#group-sessions"
+                      hx-target="#group-sessions" hx-swap="outerHTML">Отмена</button>
+            </td>
+          </tr>
+        {% else %}
+          <tr class="{% if not session.is_active %}text-body-secondary{% endif %}">
+            <td class="fw-semibold">{{ session.start_time|time:"G:i" }}–{{ session.end_time|time:"G:i" }}</td>
+            <td>
+              {{ session.procedure.name }}
+              {% if session.procedure.kind == "POOL" %}<span class="badge text-bg-info">бассейн</span>{% endif %}
+            </td>
+            <td>{{ session.duration_min }}</td>
+            <td>{{ session.place|default:session.procedure.place|default:"—" }}</td>
+            <td>{% if session.is_active %}<i class="bi bi-check-lg text-success" aria-label="да"></i>{% else %}нет{% endif %}</td>
+            <td class="text-end">
+              <button class="btn btn-sm btn-outline-secondary" title="Изменить"
+                      hx-get="{% url 'scheduling:session_edit' session.pk %}"
+                      hx-target="#group-sessions" hx-swap="outerHTML"><i class="bi bi-pencil"></i></button>
+            </td>
+          </tr>
+        {% endif %}
+      {% empty %}
+        <tr><td colspan="6" class="text-body-secondary">Занятий групп пока нет.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if add_form %}
+    <form class="card" hx-post="{% url 'scheduling:session_add' %}" hx-target="#group-sessions" hx-swap="outerHTML">
+      <div class="card-body">
+        <h3 class="h6">Добавить занятие группы</h3>
+        {% for e in add_form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
+        <div class="row g-2 align-items-start">
+          <div class="col-4">{% include "includes/form_field.html" with field=add_form.procedure wrapper_class="mb-0" %}</div>
+          <div class="col-2">{% include "includes/form_field.html" with field=add_form.start_time wrapper_class="mb-0" %}</div>
+          <div class="col-2">{% include "includes/form_field.html" with field=add_form.duration_min wrapper_class="mb-0" %}</div>
+          <div class="col-3">{% include "includes/form_field.html" with field=add_form.place wrapper_class="mb-0" %}</div>
+          <div class="col-1 pt-4"><button type="submit" class="btn btn-success mt-1">Добавить</button></div>
+        </div>
+      </div>
+    </form>
+  {% endif %}
+</div>
