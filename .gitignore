@@ -9,3 +9,4 @@ htmlcov/
 /media/
 /staticfiles/
 /out/
+.claude
