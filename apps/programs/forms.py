@@ -4,7 +4,7 @@ from apps.catalog.services import visible_procedures
 from apps.common.forms import BootstrapFormMixin, DateInput
 from apps.org.models import Department
 
-from .models import Prescription, Program
+from .models import Prescription, Program, WithdrawalReason
 from .services import doctors_for
 
 
@@ -89,3 +89,13 @@ class PrescriptionEditForm(BootstrapFormMixin, forms.ModelForm):
         procedure.required = True
         procedure.empty_label = "— выберите процедуру —"
         procedure.label_from_instance = lambda p: f"{p.name} · {p.get_kind_display()}"
+
+
+class WithdrawalForm(BootstrapFormMixin, forms.Form):
+    """Выбытие пациента (FR-PRG-9): с какого дня у него нет занятий и почему."""
+
+    date_from = forms.DateField(
+        label="Выбыл с", widget=DateInput(), help_text="Первый день без занятий."
+    )
+    reason = forms.ChoiceField(label="Причина", choices=WithdrawalReason.choices)
+    note = forms.CharField(label="Комментарий", max_length=200, required=False)

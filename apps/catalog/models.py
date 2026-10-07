@@ -60,6 +60,9 @@ class Equipment(models.Model):
 
 class ProcedureKind(models.TextChoices):
     LFK_GROUP = "LFK_GROUP", "Группа ЛФК"
+    # Группы дневного стационара (Gruppy_DS.xlsx): назначают пациентам любого отделения,
+    # с инструкторами и шахматкой не связаны — как бассейн.
+    DS_GROUP = "DS_GROUP", "Группа ДС"
     POOL = "POOL", "Бассейн"
     INDIVIDUAL = "INDIVIDUAL", "Индивидуальное занятие"
     EQUIPMENT = "EQUIPMENT", "Тренажёр"
@@ -67,10 +70,11 @@ class ProcedureKind(models.TextChoices):
 
 
 # Виды, у которых есть расписание групп (GroupSession).
-SESSION_KINDS = (ProcedureKind.LFK_GROUP, ProcedureKind.POOL)
+SESSION_KINDS = (ProcedureKind.LFK_GROUP, ProcedureKind.DS_GROUP, ProcedureKind.POOL)
 # Виды, которые подбор ставит в расписание программы сам (TZ.md §7.3, шаги 1–4).
 SCHEDULED_KINDS = (
     ProcedureKind.LFK_GROUP,
+    ProcedureKind.DS_GROUP,
     ProcedureKind.POOL,
     ProcedureKind.INDIVIDUAL,
     ProcedureKind.EQUIPMENT,
@@ -122,6 +126,14 @@ class Procedure(models.Model):
         help_text="Для «Бассейн» без группы: своего расписания нет, группу бассейна выбирает "
         "специалист ФР в расписании программы.",
     )
+    # Мото-Л и Артромот проводятся на индивидуальном занятии, но только вечером: это не
+    # отдельное занятие, а условие для одного из индивидуальных (TZ.md, FR-SCH-8).
+    evening_individual = models.BooleanField(
+        "вечернее индивидуальное",
+        default=False,
+        help_text="Проводится на одном из индивидуальных занятий пациента, только с 18:00. "
+        "Своего расписания и строки в карте нет.",
+    )
     is_active = models.BooleanField("действует", default=True)
 
     history = HistoricalRecords()
@@ -159,6 +171,10 @@ class Procedure(models.Model):
             raise ValidationError({"equipment": "Тренажёр указывается только для вида «Тренажёр»."})
         if self.group_choice and self.kind != ProcedureKind.POOL:
             raise ValidationError({"group_choice": "Выбор группы бывает только у бассейна."})
+        if self.evening_individual and self.kind != ProcedureKind.CARD_ONLY:
+            raise ValidationError(
+                {"evening_individual": "Вечернее индивидуальное — вид «Только строка в карте»."}
+            )
         if self.group_choice and self.pk and self.sessions.exists():
             raise ValidationError(
                 {"group_choice": "У процедуры есть расписание — это уже группа бассейна."}
@@ -166,7 +182,8 @@ class Procedure(models.Model):
 
 
 class GroupSession(models.Model):
-    """Ежедневное занятие группы ЛФК или бассейна (TZ.md, FR-CAT-3). Вместимость не ограничена."""
+    """Ежедневное занятие группы ЛФК, ДС или бассейна (TZ.md, FR-CAT-3). Вместимость
+    не ограничена."""
 
     procedure = models.ForeignKey(
         Procedure, on_delete=models.PROTECT, related_name="sessions", verbose_name="группа"
@@ -197,7 +214,9 @@ class GroupSession(models.Model):
 
     def clean(self) -> None:
         if self.procedure_id and self.procedure.kind not in SESSION_KINDS:
-            raise ValidationError({"procedure": "Расписание бывает только у групп ЛФК и бассейна."})
+            raise ValidationError(
+                {"procedure": "Расписание бывает только у групп ЛФК, ДС и бассейна."}
+            )
         if self.procedure_id and self.procedure.group_choice:
             raise ValidationError(
                 {"procedure": "У «Бассейн» без группы нет расписания — выберите группу бассейна."}

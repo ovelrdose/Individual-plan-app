@@ -2,7 +2,6 @@
 
 from .engine import propose
 from .model import (
-    Assignment,
     Busy,
     EquipmentLoad,
     Issue,
@@ -11,15 +10,12 @@ from .model import (
     Placement,
     Proposal,
     Session,
-    Slot,
     Snapshot,
-    Staff,
     is_weekend,
 )
 from .typical_day import GridRow, ScheduledItem, TypicalRow, day_grid, typical_day
 
 __all__ = [
-    "Assignment",
     "Busy",
     "EquipmentLoad",
     "GridRow",
@@ -30,9 +26,7 @@ __all__ = [
     "Proposal",
     "ScheduledItem",
     "Session",
-    "Slot",
     "Snapshot",
-    "Staff",
     "TypicalRow",
     "day_grid",
     "is_weekend",

@@ -27,6 +27,7 @@
     <button type="submit" class="btn btn-outline-secondary">Найти</button>
   </form>
 
+  <div id="program-list" data-live="programs">
   {% if programs %}
     <table class="table table-hover align-middle">
       <thead class="table-light">
@@ -48,6 +49,9 @@
             <td class="text-nowrap">{{ program.start_date|date:"d.m.Y" }} – {{ program.end_date|date:"d.m.Y" }}</td>
             <td>{{ program.attending_doctor }}</td>
             <td>
+              {% if program.withdrawal %}
+                <span class="badge text-bg-danger">{{ program.withdrawal }}</span>
+              {% endif %}
               {% if program.import_warnings or program.unrecognized_count %}
                 <span class="badge text-bg-warning">требует проверки</span>
               {% endif %}
@@ -68,4 +72,5 @@
       {% if query %}Ничего не нашли по запросу «{{ query }}».{% else %}Программ нет.{% endif %}
     </p>
   {% endif %}
+  </div>
 {% endblock %}

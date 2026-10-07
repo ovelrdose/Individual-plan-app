@@ -36,6 +36,38 @@
       <div class="col-8">{% include "includes/form_field.html" with field=form.end_date %}</div>
     </div>
 
+    {% if courses %}
+      {# Прошлые курсы пациента (FR-PRG-10): откуда взять назначения. #}
+      <div class="card border-info mb-3">
+        <div class="card-body">
+          <h2 class="h6">Пациент уже лечился в отделении</h2>
+          <p class="small text-body-secondary mb-2">Найдены курсы с тем же ФИО. ИБ, палата, ШРМ и даты — из этой формы.</p>
+          {% for course, copy, link in courses %}
+            <div class="mb-2">
+              <div><strong>{{ course.start_date|date:"d.m.Y" }} – {{ course.end_date|date:"d.m.Y" }}</strong>,
+                ШРМ {{ course.shrm }}{% if course.diagnosis %}, {{ course.diagnosis }}{% endif %}
+                {% if course.withdrawal %}<span class="badge text-bg-danger">{{ course.withdrawal }}</span>{% endif %}
+                <a href="{% url 'programs:detail' course.pk %}" target="_blank" class="small">открыть</a></div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="previous_choice" id="copy-{{ course.pk }}"
+                       value="{{ copy }}"{% if previous_choice == copy %} checked{% endif %}>
+                <label class="form-check-label" for="copy-{{ course.pk }}">Взять прошлый план — назначения и группа бассейна</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="previous_choice" id="link-{{ course.pk }}"
+                       value="{{ link }}"{% if previous_choice == link %} checked{% endif %}>
+                <label class="form-check-label" for="link-{{ course.pk }}">Новые назначения, курс связать с прошлым</label>
+              </div>
+            </div>
+          {% endfor %}
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="previous_choice" id="choice-other" value="other"{% if previous_choice == "other" %} checked{% endif %}>
+            <label class="form-check-label" for="choice-other">Это другой пациент</label>
+          </div>
+        </div>
+      </div>
+    {% endif %}
+
     <button type="submit" class="btn btn-success">Сохранить</button>
     <a href="{% if program.pk %}{% url 'programs:detail' program.pk %}{% else %}{% url 'programs:list' %}{% endif %}"
        class="btn btn-link">Отмена</a>

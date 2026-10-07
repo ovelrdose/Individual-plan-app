@@ -21,12 +21,12 @@ from apps.catalog.models import (
     Procedure,
     ProcedureKind,
 )
+from apps.live import events as live
+from apps.live import topics as live_topics
 from apps.programs.models import Prescription, Program
-from apps.staff.models import Instructor
-from apps.staff.services import active_instructors, build_teams, instructor_calendars
 
+from . import board_days
 from .domain import (
-    Assignment,
     Busy,
     EquipmentLoad,
     GridRow,
@@ -34,9 +34,7 @@ from .domain import (
     Proposal,
     ScheduledItem,
     Session,
-    Slot,
     Snapshot,
-    Staff,
     TypicalRow,
     day_grid,
     is_weekend,
@@ -44,10 +42,16 @@ from .domain import (
     typical_day,
 )
 from .domain.model import Kind
-from .models import Booking, BookingKind, BookingSource, RemovedSession
+from .models import BoardDay, BoardPatient, Booking, BookingKind, BookingSource, RemovedSession
 
-# Что ставит подбор: группы ЛФК, бассейн, индивидуальные и тренажёры (TZ.md §7.3).
-AUTO_KINDS = SCHEDULED_KINDS
+# Что ставит подбор на весь курс: группы ЛФК, бассейн и тренажёры (TZ.md, FR-SCH-2).
+# Индивидуальные — только в шахматке на день вперёд (board_days, FR-SCH-3).
+AUTO_KINDS = (
+    ProcedureKind.LFK_GROUP,
+    ProcedureKind.DS_GROUP,
+    ProcedureKind.POOL,
+    ProcedureKind.EQUIPMENT,
+)
 MIDNIGHT = time(0, 0)
 
 
@@ -56,43 +60,8 @@ class ScheduleError(Exception):
 
 
 def can_schedule(user: User, program: Program) -> bool:
-    """Расписание правят специалист ФР и администратор (03-architecture.md §8)."""
+    """Расписание правят специалист ФР и администратор (TZ.md §3)."""
     return has_role(user, program.department, Role.REHAB)
-
-
-def replan_by(user: User, program: Program) -> Proposal:
-    """«Подобрать заново»: всё, кроме закреплённых, — с нуля, без прошлых постановок
-    индивидуальных (решение 50): специалист перераспределяет нагрузку."""
-    require_role(user, program.department, Role.REHAB)
-    return replan(program, keep_previous=False)
-
-
-def preferred_instructor_options() -> list[Instructor]:
-    """Из кого выбирать инструктора по желанию пациента: действующие, по порядку шахматки."""
-    return active_instructors()
-
-
-@transaction.atomic
-def choose_preferred_instructor(
-    user: User, program: Program, instructor: Instructor | None
-) -> Proposal:
-    """Инструктор по желанию пациента (TZ.md FR-PRG-1, решение 44). Пустое значение снимает
-    выбор. Индивидуальные занятия сразу пересобираются: в его рабочие дни — у него."""
-    program = (
-        Program.objects.select_for_update(of=("self",))
-        .select_related("department")
-        .get(pk=program.pk)
-    )
-    require_role(user, program.department, Role.REHAB)
-    if (
-        instructor is not None
-        and not Instructor.objects.filter(pk=instructor.pk, is_active=True).exists()
-    ):
-        raise ScheduleError("Выберите действующего инструктора.")
-    program.preferred_instructor = instructor
-    program._history_user = user
-    program.save(update_fields=["preferred_instructor", "updated_at"])
-    return replan(program)
 
 
 def pool_groups() -> list[Procedure]:
@@ -131,18 +100,17 @@ def choose_pool_group(user: User, prescription: Prescription, group: Procedure |
 
 
 @transaction.atomic
-def replan(program: Program, *, keep_previous: bool = True) -> Proposal:
-    """Перестраивает расписание программы: незакреплённые занятия групп, бассейна,
-    индивидуальные и тренажёры удаляются и подбираются заново по текущим назначениям,
-    датам курса, расписанию групп и сменам инструкторов.
+def replan(program: Program) -> Proposal:
+    """Перестраивает расписание программы: незакреплённые занятия групп, бассейна и
+    тренажёров удаляются и подбираются заново по текущим назначениям, дням занятий и
+    расписанию групп (FR-SCH-1, FR-SCH-2). Индивидуальные живут в шахматке на день вперёд:
+    после пересборки пациент сверяется с составленными шахматками (``board_days``).
 
     Вызывается после импорта и после любых изменений назначений и курса — специалисту не
     нужно помнить о «пересчитать». Закреплённые вручную занятия остаются, кроме тех, что
-    оказались вне курса или вне дат назначения (FR-SCH-11, FR-SCH-12). Прошлые
-    автоматические индивидуальные занятия сохраняются, если ещё допустимы (решение 49);
-    ``keep_previous=False`` — подбор с нуля («Подобрать заново», решение 50).
+    оказались вне курса или вне дат назначения.
 
-    Порядок блокировок везде один: программа → тренажёры → инструкторы (по pk).
+    Порядок блокировок везде один: программа → тренажёры → инструкторы → шахматки.
     """
     program = (
         Program.objects.select_for_update(of=("self",))
@@ -154,27 +122,6 @@ def replan(program: Program, *, keep_previous: bool = True) -> Proposal:
     }
     prescriptions = [p for p in every.values() if p.procedure and p.procedure.kind in AUTO_KINDS]
     active = {pk: set(_active_dates(program, p)) for pk, p in every.items()}
-
-    bookings = list(program.bookings.all())
-    previous = tuple(
-        Assignment(b.prescription_id, b.date, b.instructor_id, b.slot_id)
-        for b in bookings
-        if keep_previous
-        and not b.pinned
-        and b.kind == BookingKind.INDIVIDUAL
-        and b.instructor_id is not None
-    )
-    # Автоматические занятия пересоздаются целиком и без журнала (TZ.md §13, п. 30):
-    # иначе каждая правка назначения писала бы в историю сотни строк.
-    automatic = [b.pk for b in bookings if not b.pinned and b.kind in AUTO_KINDS]
-    Booking.objects.filter(pk__in=automatic)._raw_delete(Booking.objects.db)
-    # Закреплённые вручную — любого вида — остаются, пока подходят к назначению.
-    # Выпавшие из курса или из дат назначения удаляются обычным путём, с записью в журнал.
-    for booking in bookings:
-        if booking.pinned and not _still_valid(booking, every, active):
-            booking.delete()
-    pinned = list(program.bookings.all())
-
     equipment_ids = sorted(
         {p.procedure.equipment_id for p in prescriptions if p.procedure.equipment_id}
     )
@@ -184,25 +131,43 @@ def replan(program: Program, *, keep_previous: bool = True) -> Proposal:
         e.pk: e
         for e in Equipment.objects.select_for_update().filter(pk__in=equipment_ids).order_by("pk")
     }
+    board_days.ensure_boards()
+    board_days.lock()
+
+    # Индивидуальные в составленных шахматках (сегодня и дальше) на время пересборки снимаем:
+    # группы идут по своему расписанию, а пациент потом сверяется с шахматкой — занятие,
+    # которое пересеклось с группой, уходит в «Не распределены» (FR-SCH-6). Прошлые дни
+    # не трогаем — они только для просмотра.
+    lifted = program.bookings.filter(kind=BookingKind.INDIVIDUAL, date__gte=board_days.today())
+    seats: dict[date, list[board_days.Seat]] = defaultdict(list)
+    for item in lifted:
+        seats[item.date].append(board_days.Seat(item.instructor_id, item.slot_id, item.note))
+    lifted._raw_delete(Booking.objects.db)
+
+    bookings = list(program.bookings.all())
+    # Автоматические занятия пересоздаются целиком и без журнала (TZ.md §13, п. 30):
+    # иначе каждая правка назначения писала бы в историю сотни строк.
+    automatic = [b.pk for b in bookings if not b.pinned and b.kind in AUTO_KINDS]
+    Booking.objects.filter(pk__in=automatic)._raw_delete(Booking.objects.db)
+    # Закреплённые вручную группы и тренажёры остаются, пока подходят к назначению.
+    # Выпавшие из курса или из дат назначения удаляются обычным путём, с записью в журнал.
+    for booking in bookings:
+        if (
+            booking.kind in AUTO_KINDS
+            and booking.pinned
+            and not _still_valid(booking, every, active)
+        ):
+            booking.delete()
+    pinned = list(program.bookings.all())
 
     removed: Counter[tuple[int, date]] = Counter()
     for item in RemovedSession.objects.filter(prescription__program=program):
         removed[(item.prescription_id, item.date)] += item.units
     needs = tuple(_need(p, active[p.pk], pinned, equipment, removed) for p in prescriptions)
-    individual_dates = {day for need in needs if need.kind == Kind.INDIVIDUAL for day in need.dates}
     snapshot = Snapshot(
         needs=needs,
-        patient_busy=tuple(
-            Busy(
-                b.date,
-                _minutes(b.start),
-                _minutes(b.end),
-                individual=b.kind == BookingKind.INDIVIDUAL,
-            )
-            for b in pinned
-        ),
+        patient_busy=tuple(Busy(b.date, _minutes(b.start), _minutes(b.end)) for b in pinned),
         equipment_load=_equipment_load(program, equipment_ids),
-        staff=_staff(program, previous) if individual_dates else Staff(),
     )
     proposal = propose(snapshot)
 
@@ -218,8 +183,6 @@ def replan(program: Program, *, keep_previous: bool = True) -> Proposal:
                 end=_time(placement.end),
                 group_session_id=placement.session_id,
                 equipment_id=placement.equipment_id,
-                instructor_id=placement.instructor_id,
-                slot_id=placement.slot_id,
                 source=BookingSource.AUTO,
             )
             for placement in proposal.placements
@@ -230,6 +193,12 @@ def replan(program: Program, *, keep_previous: bool = True) -> Proposal:
         for issue in proposal.issues
     ]
     program.save(update_fields=["schedule_issues", "updated_at"])
+    board_days.sync_program(program, seats)
+    # Пакетные записи выше сигналов не дают: тренажёры видны и в шахматках (TZ.md NFR-11).
+    live.publish(
+        live_topics.program(program.pk),
+        *(live_topics.board(day) for day in board_days.board_dates(board_days.today())),
+    )
     return proposal
 
 
@@ -256,7 +225,11 @@ def _active_dates(program: Program, prescription: Prescription) -> list[date]:
 
 def _is_active(prescription: Prescription, program: Program, day: date) -> bool:
     start = prescription.start_date or program.start_date
-    return start <= day and (prescription.cancel_date is None or day < prescription.cancel_date)
+    return (
+        program.is_therapy_day(day)
+        and start <= day
+        and (prescription.cancel_date is None or day < prescription.cancel_date)
+    )
 
 
 def _need(
@@ -289,16 +262,6 @@ def _need(
             pinned_units=tuple(sorted(own.items())),
             unavailable="" if item.is_active else f"тренажёр «{item.name}» выключен в справочнике",
         )
-    if procedure.kind == ProcedureKind.INDIVIDUAL:
-        return Need(
-            prescription_id=prescription.pk,
-            procedure_id=procedure.pk,
-            kind=Kind.INDIVIDUAL,
-            label=procedure.name,
-            dates=tuple(sorted(dates)),
-            per_day=prescription.per_day,
-            pinned_units=tuple(sorted(own.items())),
-        )
     group_required = procedure.is_generic_pool
     if group_required and prescription.pool_group is not None:
         # Занятия встают во время группы, которую выбрал специалист ФР.
@@ -311,78 +274,13 @@ def _need(
         prescription_id=prescription.pk,
         procedure_id=procedure.pk,
         kind=Kind(procedure.kind),
-        label=procedure.card_label if procedure.kind == ProcedureKind.LFK_GROUP else procedure.name,
+        label=procedure.name if procedure.kind == ProcedureKind.POOL else procedure.card_label,
         dates=tuple(sorted(dates)),
         sessions=sessions,
         per_day=prescription.per_day,
         # Закреплённое занятие — одно из «р/д» этого дня, остальные подбор добирает.
         pinned_units=tuple(sorted(own.items())),
         group_required=group_required,
-    )
-
-
-def _staff(program: Program, previous: tuple[Assignment, ...]) -> Staff:
-    """Инструкторы для шага 3: кто свободен в дату и слот, загрузка за даты курса.
-
-    Строки инструкторов блокируются (по pk, после программы и тренажёров): два параллельных
-    подбора разных программ не займут один слот инструктора — второй ждёт и видит
-    занятия первого (FR-SCH-3). Запросы — на всех инструкторов сразу, без N+1.
-    """
-    instructors = list(
-        Instructor.objects.select_for_update(of=("self",))
-        .filter(is_active=True)
-        .select_related("partner")
-        .order_by("pk")
-    )
-    start, end = program.start_date, program.end_date
-    slots = list(InstructorSlot.objects.all())
-    calendars = instructor_calendars(instructors, start, end)
-    taken: set[tuple[date, int, int]] = set()
-    load: Counter[int] = Counter()
-    others = Booking.objects.filter(
-        ~Q(program=program),
-        kind=BookingKind.INDIVIDUAL,
-        instructor__in=instructors,
-        date__range=(start, end),
-    ).values_list("date", "slot_id", "instructor_id")
-    for item in others:
-        taken.add(item)
-        if not is_weekend(item[0]):
-            load[item[2]] += 1
-    day_slots = [slot.pk for slot in slots if not slot.is_evening]
-    # Инструктор подбирается только на будни (решение 56).
-    weekdays = [day for day in program.course_dates() if not is_weekend(day)]
-    free = frozenset(
-        (day, slot_id, item.pk)
-        for item in instructors
-        for day in weekdays
-        for slot_id in calendars[item.pk].day(day).free_slots(day_slots)
-        if (day, slot_id, item.pk) not in taken
-    )
-    # По графику, без исключений: больничный — не штатный выходной, замена в этот день —
-    # отклонение, которое специалист должен видеть (FR-SCH-13).
-    working = frozenset(
-        (day, item.pk)
-        for item in instructors
-        for day in weekdays
-        if calendars[item.pk].by_pattern(day)
-    )
-    ordered = sorted(instructors, key=lambda i: (i.display_order, i.short_name))
-    return Staff(
-        slots=tuple(
-            Slot(slot.pk, _minutes(slot.start), _minutes(slot.end), slot.is_evening)
-            for slot in slots
-        ),
-        teams=tuple(build_teams(ordered)),
-        free=free,
-        working=working,
-        load=tuple(sorted(load.items())),
-        preferred=program.preferred_instructor_id,
-        preferred_name=(
-            program.preferred_instructor.short_name if program.preferred_instructor else ""
-        ),
-        previous=previous,
-        max_per_day=program.department.max_individual_per_day,
     )
 
 
@@ -457,7 +355,7 @@ def save_group_session(
     session.full_clean()
     session._history_user = user
     today = today or date.today()
-    # Сохраняем после блокировки программ — единый порядок блокировок (03-architecture.md §4.5).
+    # Сохраняем после блокировки программ — единый порядок блокировок.
     programs = replan_for_group(session.procedure_id, today=today, save=session.save)
     pinned = list(
         Booking.objects.filter(pinned=True, group_session=session, date__gte=today)
@@ -476,7 +374,7 @@ def save_equipment(user: User, equipment: Equipment, *, today: date | None = Non
     equipment.full_clean()
     equipment._history_user = user
     # Строка тренажёра меняется после блокировки программ: подбор блокирует программу раньше
-    # тренажёра, обратный порядок дал бы взаимную блокировку (03-architecture.md §4.5).
+    # тренажёра, обратный порядок дал бы взаимную блокировку.
     programs = replan_for_equipment(equipment.pk, today=today, save=equipment.save)
     return Rescheduled(programs, [])
 
@@ -542,12 +440,26 @@ class CalendarCell:
     active: bool
     # Сколько занятий в эту дату убрано вручную (решение 57) — можно вернуть.
     removed: int = 0
+    # Индивидуальные — из шахматок (FR-SCH-16): в каком блоке пациент, если его нет в сетке,
+    # и «шахматки ещё нет» для дат дальше завтрашней.
+    individual: bool = False
+    hold: str = ""
+    pending: bool = False
 
 
 @dataclass(frozen=True)
 class CalendarRow:
     date: date
     cells: list[CalendarCell]  # по колонкам ProgramSchedule.columns
+
+
+@dataclass(frozen=True)
+class BoardLine:
+    """Индивидуальные пациента в составленной шахматке на дату (FR-SCH-16)."""
+
+    date: date
+    text: str  # «9:10 Соколов, 14:20 Лебедева», «в блоке «Не распределены»», «занятий нет»
+    hold: bool = False  # пациент в блоке — специалисту нужно поставить его в сетку
 
 
 @dataclass(frozen=True)
@@ -566,10 +478,7 @@ class ProgramSchedule:
     # Назначения «Бассейн» без группы и группы, из которых выбирать (FR-PRG-3).
     pools: list[Prescription] = field(default_factory=list)
     pool_groups: list[PoolGroupOption] = field(default_factory=list)
-    # Есть индивидуальные — показываем выбор инструктора по желанию пациента (решение 44).
-    individual: bool = False
-    preferred: Instructor | None = None
-    instructors: list[Instructor] = field(default_factory=list)
+    boards: list[BoardLine] = field(default_factory=list)
 
     @property
     def conflicts(self) -> list[dict]:
@@ -581,12 +490,19 @@ class ProgramSchedule:
 
 
 def program_schedule(program: Program) -> ProgramSchedule:
-    """Типичный день (FR-SCH-6) и календарь курса: строки — даты, колонки — назначения."""
+    """Типичный день (FR-SCH-6) и календарь курса: строки — даты, колонки — назначения.
+
+    Группы, бассейн и тренажёры — по всем дням курса. Индивидуальные живут в шахматке на день
+    вперёд: в типичный день (и в карту) идут из ближайшей шахматки, где стоит пациент, —
+    сегодняшней, иначе завтрашней (FR-SCH-16, FR-CRD-2)."""
     bookings = list(
         program.bookings.select_related(
             "procedure", "group_session__procedure", "prescription", "instructor__partner"
         )
     )
+    today = board_days.today()
+    individual = [b for b in bookings if b.kind == BookingKind.INDIVIDUAL]
+    nearest = min((b.date for b in individual if b.date >= today), default=None)
     items = [
         ScheduledItem(
             key=b.prescription_id,
@@ -599,12 +515,15 @@ def program_schedule(program: Program) -> ProgramSchedule:
             who=b.instructor.team_label if b.instructor else "",
         )
         for b in bookings
+        if b.kind != BookingKind.INDIVIDUAL or b.date == nearest
     ]
     typical = typical_day(items)
     # Колонки — все назначения, которые ставит подбор, даже если поставить не удалось:
     # пустая колонка тоже информация.
     columns = list(
-        program.prescriptions.filter(procedure__kind__in=AUTO_KINDS).select_related("procedure")
+        program.prescriptions.filter(procedure__kind__in=SCHEDULED_KINDS).select_related(
+            "procedure"
+        )
     )
     by_day: dict[tuple[date, int], list[Booking]] = defaultdict(list)
     for b in bookings:
@@ -614,29 +533,37 @@ def program_schedule(program: Program) -> ProgramSchedule:
         (item.date, item.prescription_id): item.units
         for item in RemovedSession.objects.filter(prescription__program=program)
     }
+    boards = set(BoardDay.objects.filter(date__gte=today).values_list("date", flat=True))
+    holds = {
+        item.date: item for item in BoardPatient.objects.filter(program=program, date__in=boards)
+    }
     calendar = [
         CalendarRow(
             day,
             [
-                CalendarCell(
-                    by_day.get((day, column.pk), []),
-                    (day, column.pk) in deviations,
-                    _is_active(column, program, day),
-                    removed.get((day, column.pk), 0),
+                _calendar_cell(
+                    program, column, day, by_day.get((day, column.pk), []),
+                    deviation=(day, column.pk) in deviations,
+                    removed=removed.get((day, column.pk), 0),
+                    board=day in boards, past=day < today, hold=holds.get(day),
                 )
                 for column in columns
             ],
         )
         for day in program.course_dates()
-    ]
+    ]  # fmt: skip
     day = day_grid(typical, _day_slots())
     pools = [
         p for p in program.prescriptions.select_related("procedure", "pool_group")
         if p.procedure and p.procedure.is_generic_pool
     ]  # fmt: skip
     options = [_pool_option(group) for group in pool_groups()] if pools else []
-    individual = any(c.procedure.kind == ProcedureKind.INDIVIDUAL for c in columns)
-    preferred = program.preferred_instructor
+    has_individual = any(c.procedure.kind == ProcedureKind.INDIVIDUAL for c in columns)
+    lines = (
+        [_board_line(day, individual, holds.get(day)) for day in sorted(boards)]
+        if has_individual
+        else []
+    )
     return ProgramSchedule(
         typical,
         day,
@@ -645,10 +572,53 @@ def program_schedule(program: Program) -> ProgramSchedule:
         list(program.schedule_issues),
         pools,
         options,
-        individual=individual or preferred is not None,
-        preferred=preferred,
-        instructors=preferred_instructor_options() if individual or preferred else [],
+        lines,
     )
+
+
+def _board_line(day: date, individual: list[Booking], hold: BoardPatient | None) -> BoardLine:
+    seats = sorted((b for b in individual if b.date == day), key=lambda b: b.start)
+    parts = [
+        f"{b.start:%-H:%M} {b.instructor.short_name if b.instructor else ''}".strip()
+        + (f" ({b.note})" if b.note else "")
+        for b in seats
+    ]
+    if hold is not None and hold.unplaced:
+        parts.append(f"в блоке «Не распределены» ({hold.unplaced})")
+    if hold is not None and hold.cancelled:
+        parts.append(f"в блоке «Отменены» ({hold.cancelled})")
+    held = hold is not None and bool(hold.unplaced or hold.cancelled)
+    return BoardLine(day, ", ".join(parts) or "занятий нет", held)
+
+
+def _calendar_cell(
+    program: Program,
+    column: Prescription,
+    day: date,
+    bookings: list[Booking],
+    *,
+    deviation: bool,
+    removed: int,
+    board: bool,
+    past: bool,
+    hold: BoardPatient | None,
+) -> CalendarCell:
+    active = _is_active(column, program, day)
+    if column.procedure.kind != ProcedureKind.INDIVIDUAL:
+        return CalendarCell(bookings, deviation, active, removed)
+    text = ""
+    if hold is not None and hold.unplaced:
+        text = "не распределён"
+    elif hold is not None and hold.cancelled:
+        text = "отменён"
+    # Будни дальше составленных шахматок — индивидуальное ещё не ставилось; в выходные шахматки
+    # нет вовсе.
+    active = active and not is_weekend(day)
+    pending = active and not bookings and not past and not board
+    return CalendarCell(
+        bookings, False, active, 0,
+        individual=True, hold=text, pending=pending,
+    )  # fmt: skip
 
 
 def _pool_option(group: Procedure) -> PoolGroupOption:

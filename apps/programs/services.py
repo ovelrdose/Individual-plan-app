@@ -6,17 +6,19 @@ from enum import StrEnum
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Count, Max, Q, QuerySet
+from django.db.models import Count, Exists, Max, OuterRef, Q, QuerySet
 from django.http import Http404
 
 from apps.accounts.access import departments_for, has_role, is_admin, require_role
 from apps.accounts.models import Role, User
-from apps.catalog.models import SCHEDULED_KINDS
+from apps.catalog.models import SCHEDULED_KINDS, ProcedureKind
 from apps.org.models import Department
+from apps.scheduling import board_days
+from apps.scheduling.models import BoardPatient
 from apps.scheduling.services import replan
 
-from .domain import fold, room_sort_key
-from .models import Prescription, Program
+from .domain import fold, patient_key, room_sort_key
+from .models import Prescription, Program, Withdrawal, WithdrawalReason
 
 
 class ProgramsError(Exception):
@@ -26,6 +28,7 @@ class ProgramsError(Exception):
 class Period(StrEnum):
     CURRENT = "current"
     FINISHED = "finished"
+    WITHDRAWN = "withdrawn"
     ALL = "all"
 
 
@@ -62,10 +65,15 @@ def programs_for(
             ),
         )
     )
+    # Выбывший и не восстановленный — завершён, даже если плановый курс ещё идёт (FR-PRG-9).
+    withdrawn = Exists(Withdrawal.objects.filter(program=OuterRef("pk"), returned_on__isnull=True))
     if period == Period.CURRENT:
-        programs = programs.filter(end_date__gte=today)
+        programs = programs.filter(end_date__gte=today).exclude(withdrawn)
     elif period == Period.FINISHED:
-        programs = programs.filter(end_date__lt=today)
+        programs = programs.filter(Q(end_date__lt=today) | withdrawn)
+    elif period == Period.WITHDRAWN:
+        programs = programs.filter(withdrawn)
+    programs = programs.prefetch_related("withdrawals")
     key = fold(query.strip())
     found = [
         p for p in programs if not key or key in fold(p.full_name) or key in fold(p.history_number)
@@ -92,8 +100,9 @@ def doctors_for(department: Department) -> QuerySet[User]:
 
 
 def can_edit(user: User, program: Program) -> bool:
-    """Данные программы и назначения правит врач отделения и администратор (§3)."""
-    return has_role(user, program.department, Role.DOCTOR)
+    """Данные программы и назначения правит врач отделения и администратор (§3); у выбывшего —
+    только просмотр (FR-PRG-9)."""
+    return has_role(user, program.department, Role.DOCTOR) and program.withdrawal is None
 
 
 def can_create(user: User, department: Department) -> bool:
@@ -109,6 +118,16 @@ def review_items(program: Program) -> list[str]:
         items.append(
             f"Не распознано назначений: {unrecognized} — выберите для них процедуру "
             "(строки подсвечены)."
+        )
+    procedures = [
+        p.procedure
+        for p in program.prescriptions.select_related("procedure").exclude(procedure=None)
+    ]
+    evening = [p.card_label for p in procedures if p.evening_individual]
+    if evening and not any(p.kind == ProcedureKind.INDIVIDUAL for p in procedures):
+        items.append(
+            f"Назначено «{evening[0]}», а индивидуального занятия нет — оно проводится "
+            "на индивидуальном после 18:00. Добавьте индивидуальное занятие."
         )
     return items
 
@@ -127,6 +146,8 @@ def save_program(user: User, program: Program, *, end_date_changed: bool) -> Pro
     require_role(user, program.department, Role.DOCTOR)
     if program.pk:
         _lock(program)
+        if program.withdrawals.filter(returned_on__isnull=True).exists():
+            raise ProgramsError("Пациент выбыл — данные и назначения только для просмотра.")
     if not doctors_for(program.department).filter(pk=program.attending_doctor_id).exists():
         raise ProgramsError("Лечащий врач должен быть врачом этого отделения.")
 
@@ -180,6 +201,8 @@ def add_prescription(user: User, prescription: Prescription) -> Prescription:
     require_editable(user, _lock(prescription.program))
     last = prescription.program.prescriptions.aggregate(last=Max("card_order"))["last"]
     prescription.card_order = (last or 0) + 1
+    if prescription.procedure and prescription.procedure.evening_individual:
+        prescription.in_card = False
     prescription.full_clean()
     _save(prescription, user)
     replan(prescription.program)
@@ -192,6 +215,11 @@ def update_prescription(user: User, prescription: Prescription) -> Prescription:
     program = _lock(prescription.program)
     require_editable(user, program)
     _require_exists(program, prescription)
+    # Строку выбрали как Мото-Л / Артромот — в карте её нет (FR-SCH-8); дальше врач решает сам.
+    before = Prescription.objects.filter(pk=prescription.pk).values_list("procedure", flat=True)
+    procedure = prescription.procedure
+    if procedure and procedure.evening_individual and before.first() != procedure.pk:
+        prescription.in_card = False
     prescription.full_clean()
     _save(prescription, user, update_fields=EDITABLE_FIELDS)
     replan(program)
@@ -229,6 +257,140 @@ def move_prescription(user: User, prescription: Prescription, step: int) -> None
 
 def require_editable(user: User, program: Program) -> None:
     require_role(user, program.department, Role.DOCTOR)
+    if program.withdrawals.filter(returned_on__isnull=True).exists():
+        raise ProgramsError("Пациент выбыл — данные и назначения только для просмотра.")
+
+
+# --- Повторный курс (FR-PRG-10) -------------------------------------------------------
+
+
+def find_previous_courses(department: Department, full_name: str, start: date) -> list[Program]:
+    """Прошлые курсы пациента в отделении: то же ФИО, курс закончился до ``start`` или пациент
+    выбыл раньше. ИБ при повторной госпитализации новый — по нему не ищем (решение 63).
+    Новые сверху."""
+    key = patient_key(full_name)
+    withdrawn = Exists(
+        Withdrawal.objects.filter(
+            program=OuterRef("pk"), returned_on__isnull=True, date_from__lte=start
+        )
+    )
+    candidates = (
+        Program.objects.filter(department=department, start_date__lt=start)
+        .filter(Q(end_date__lt=start) | withdrawn)
+        .select_related("attending_doctor")
+        .order_by("-start_date", "-pk")
+    )
+    return [p for p in candidates if patient_key(p.full_name) == key]
+
+
+def patient_courses(program: Program) -> list[Program]:
+    """Все курсы пациента, связанные с этой программой, по датам (FR-PRG-10)."""
+    root = program
+    seen = {root.pk}
+    while root.previous_id and root.previous_id not in seen:
+        root = Program.objects.get(pk=root.previous_id)
+        seen.add(root.pk)
+    courses, queue = [], [root]
+    while queue:
+        item = queue.pop()
+        courses.append(item)
+        queue += [p for p in item.next_courses.all() if p.pk not in {c.pk for c in courses}]
+    return sorted(courses, key=lambda p: (p.start_date, p.pk))
+
+
+def copy_plan(user: User, program: Program, source: Program) -> None:
+    """«Взять прошлый план»: назначения прошлого курса без дат и группа бассейна, выбранная
+    специалистом ФР (решение 63). Расписание пересобирает вызывающий."""
+    for item in source.prescriptions.select_related("procedure").order_by("card_order", "pk"):
+        copy = Prescription(
+            program=program,
+            procedure=item.procedure,
+            raw_text=item.raw_text,
+            duration_min=item.duration_min,
+            per_day=item.per_day,
+            in_card=item.in_card,
+            pool_group=item.pool_group,
+            card_order=item.card_order,
+        )
+        _save(copy, user)
+
+
+@transaction.atomic
+def link_previous(user: User, program: Program, previous: Program, *, copy: bool) -> None:
+    """Связать новую программу с прошлым курсом; ``copy`` — взять его план (FR-PRG-10)."""
+    program = _lock(program)
+    require_editable(user, program)
+    if previous.department_id != program.department_id or previous.pk == program.pk:
+        raise ProgramsError("Прошлый курс должен быть из того же отделения.")
+    program.previous = previous
+    _save(program, user, update_fields=["previous", "updated_at"])
+    if copy:
+        if program.prescriptions.exists():
+            raise ProgramsError("У программы уже есть назначения — прошлый план не копируется.")
+        copy_plan(user, program, previous)
+        replan(program)
+
+
+# --- Выбытие (FR-PRG-9) ---------------------------------------------------------------
+
+
+def can_withdraw(user: User, program: Program) -> bool:
+    """Выбытие отмечают и снимают врач и специалист ФР отделения (решение 62)."""
+    return has_role(user, program.department, Role.DOCTOR) or has_role(
+        user, program.department, Role.REHAB
+    )
+
+
+def _require_withdraw(user: User, program: Program) -> None:
+    if not can_withdraw(user, program):
+        raise PermissionDenied("Выбытие отмечают врач и специалист ФР отделения.")
+
+
+@transaction.atomic
+def withdraw(user: User, program: Program, day: date, reason: str, note: str = "") -> Withdrawal:
+    """Пациент выбыл с ``day`` (первый день без занятий). Занятия с этой даты удаляются,
+    пациент уходит из шахматок и их блоков; прошедшие дни до ``day`` не меняются."""
+    program = _lock(program)
+    _require_withdraw(user, program)
+    if program.withdrawals.filter(returned_on__isnull=True).exists():
+        raise ProgramsError("Пациент уже отмечен выбывшим.")
+    if not program.start_date < day < program.end_date:
+        raise ProgramsError(
+            f"Дата выбытия — со второго дня курса до дня перед выпиской "
+            f"({program.start_date:%d.%m}–{program.end_date:%d.%m}, не включая)."
+        )
+    if reason not in WithdrawalReason.values:
+        raise ProgramsError("Выберите причину выбытия.")
+    withdrawal = Withdrawal(program=program, date_from=day, reason=reason, note=note.strip())
+    _save(withdrawal, user)
+    # Пометки «правили вручную» и блоки шахматок с этой даты больше не нужны: если пациента
+    # восстановят, он встанет в шахматку как новый.
+    BoardPatient.objects.filter(program=program, date__gte=day).delete()
+    replan(program)
+    return withdrawal
+
+
+@transaction.atomic
+def restore(user: User, program: Program, today: date | None = None) -> None:
+    """Вернуть выбывшего, пока не прошла плановая дата окончания. Он снова лечится с
+    сегодняшнего дня: дни отсутствия остаются без занятий, группы и тренажёры подбираются
+    заново, в завтрашнюю шахматку он встаёт автоматически, в сегодняшнюю — в «Не распределены».
+    Отметка, которая ещё не наступила (или поставлена сегодня), просто снимается."""
+    today = today or board_days.today()
+    program = _lock(program)
+    _require_withdraw(user, program)
+    withdrawal = program.withdrawals.filter(returned_on__isnull=True).first()
+    if withdrawal is None:
+        raise ProgramsError("Пациент не отмечен выбывшим.")
+    if today >= program.end_date:
+        raise ProgramsError("Курс уже закончился — программа в архиве, восстановить нельзя.")
+    withdrawal._history_user = user
+    if today <= withdrawal.date_from:
+        withdrawal.delete()
+    else:
+        withdrawal.returned_on = today
+        withdrawal.save(update_fields=["returned_on"])
+    replan(program)
 
 
 # --- Внутреннее -----------------------------------------------------------------------

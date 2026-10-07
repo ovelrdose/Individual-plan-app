@@ -19,6 +19,35 @@ body {
 .shift-cell.shift-on { background: var(--bs-success-bg-subtle); color: var(--bs-success-text-emphasis); }
 .shift-cell.shift-exception { border-color: var(--bs-danger); }
 
+/* Распорядок (FR-STF-5): сетка как у смен; цвет — вид, пунктир — только на дату. */
+.duty-table th, .duty-table td { font-size: .8rem; }
+.duty-cell {
+  display: block;
+  width: 100%;
+  min-width: 4.2rem;
+  height: 2.2rem;
+  padding: 0 .15rem;
+  border: 2px solid transparent;
+  background: transparent;
+  font-size: .72rem;
+  line-height: 1.05;
+  overflow: hidden;
+}
+.duty-cell:hover { outline: 2px solid var(--bs-primary); outline-offset: -2px; }
+.duty-cell.duty-legend { display: inline-block; width: 1.8rem; min-width: 0; height: 1.2rem; vertical-align: middle; }
+.duty-cell.duty-cleared { width: auto; }
+.duty-method_work { background: var(--bs-secondary-bg-subtle); color: var(--bs-secondary-text-emphasis); }
+.duty-group_lead { background: var(--bs-primary-bg-subtle); color: var(--bs-primary-text-emphasis); }
+.duty-bos { background: var(--bs-warning-bg-subtle); color: var(--bs-warning-text-emphasis); }
+.duty-other { background: var(--bs-info-bg-subtle); color: var(--bs-info-text-emphasis); }
+.duty-swatch { display: inline-block; width: .75rem; height: .75rem; border: 1px solid var(--bs-border-color); vertical-align: -1px; }
+.duty-cell.duty-once { border: 2px dashed var(--bs-danger); }
+.duty-cell.duty-cleared { border: 2px dashed var(--bs-success); color: var(--bs-success-text-emphasis); }
+.duty-off, .duty-off-legend {
+  background: repeating-linear-gradient(45deg, var(--bs-tertiary-bg), var(--bs-tertiary-bg) 4px,
+    var(--bs-secondary-bg) 4px, var(--bs-secondary-bg) 8px);
+}
+
 /* Alpine: скрытое x-show не мелькает до инициализации. */
 [x-cloak] { display: none !important; }
 
@@ -36,4 +65,18 @@ body {
 .board-evening th, .board-evening td { border-top-style: dashed; }
 .board-edit { opacity: .35; }
 .board-seat:hover .board-edit, .board-edit:focus { opacity: 1; }
+.board-seat[data-drop] { cursor: pointer; min-height: 1.4rem; border-radius: .2rem; }
+.board-seat[data-drop]:hover { background: var(--bs-primary-bg-subtle); }
+.board-drop { outline: 2px dashed var(--bs-primary); background: var(--bs-primary-bg-subtle); }
+.board-chip[draggable="true"] { cursor: grab; }
+/* Время, где у переносимого пациента другие занятия (FR-SCH-10a). */
+.board-table tr.board-conflict > *, .board-table td.board-conflict { background: var(--bs-danger-bg-subtle); }
+.board-table tr.board-conflict > .board-time { color: var(--bs-danger-text-emphasis); font-weight: 600; }
+.board-candidates { max-height: 16rem; overflow-y: auto; }
 .board-panel { position: fixed; right: 1rem; bottom: 1rem; width: 24rem; z-index: 1050; }
+
+/* Подсказка «обновлено» при изменениях других пользователей (NFR-11). */
+.live-notice { position: fixed; left: 1rem; bottom: 1rem; z-index: 1060; padding: .4rem .8rem;
+  border-radius: .375rem; background: var(--bs-dark); color: var(--bs-light); font-size: .875rem;
+  opacity: 0; transition: opacity .3s; pointer-events: none; }
+.live-notice.show { opacity: .9; }

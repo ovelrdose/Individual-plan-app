@@ -6,6 +6,8 @@ from apps.catalog.domain import normalize_name
 
 POOL_MARKERS = ("бассейн", "вводе")  # «ЛФК в воде» после нормализации — «лфквводе»
 POOL_GROUPS = ("верхн", "нижн", "спин")
+# Группы дневного стационара названы по части тела — их ищем, только если ничего другого нет.
+FALLBACK_KINDS = ("DS_GROUP",)
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,9 @@ def match_procedure(
 
     Бассейн (FR-IMP-9) — по группе «верхн/нижн/спин», без группы — общая «Бассейн».
     Остальное (FR-IMP-8) — синоним входит в строку, при нескольких — самый длинный синоним.
+    Группы ДС (FR-IMP-14) — последними: они названы по части тела, а часть тела в строке чаще
+    уточняет другую процедуру («Массаж плечевого сустава», «Артромот коленного сустава»).
+    Поэтому группа ДС — только если строка не подошла ни к одной другой процедуре.
     """
     key = normalize_name(text)
     candidates = [p for p in procedures if kinds is None or p.kind in kinds]
@@ -34,8 +39,16 @@ def match_procedure(
         if found:
             return found
 
+    main = [p for p in candidates if p.kind not in FALLBACK_KINDS]
+    fallback = [p for p in candidates if p.kind in FALLBACK_KINDS]
+    return _longest(key, main) or _longest(key, fallback)
+
+
+def _longest(key: str, procedures: list[ProcedureRef]) -> ProcedureRef | None:
+    """Процедура, синоним которой входит в строку; при нескольких — самый длинный синоним:
+    «острая спина» побеждает «спину»."""
     best, best_length = None, 0
-    for procedure in candidates:
+    for procedure in procedures:
         for synonym in procedure.match_keys():
             if synonym in key and len(synonym) > best_length:
                 best, best_length = procedure, len(synonym)

@@ -39,7 +39,7 @@
             <td class="fw-semibold">{{ session.start_time|time:"G:i" }}–{{ session.end_time|time:"G:i" }}</td>
             <td>
               {{ session.procedure.name }}
-              {% if session.procedure.kind == "POOL" %}<span class="badge text-bg-info">бассейн</span>{% endif %}
+              {% if session.procedure.kind == "POOL" %}<span class="badge text-bg-info">бассейн</span>{% elif session.procedure.kind == "DS_GROUP" %}<span class="badge text-bg-warning">ДС</span>{% endif %}
             </td>
             <td>{{ session.duration_min }}</td>
             <td>{{ session.place|default:session.procedure.place|default:"—" }}</td>

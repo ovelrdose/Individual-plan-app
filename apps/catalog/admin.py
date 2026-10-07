@@ -41,6 +41,7 @@ class ProcedureForm(forms.ModelForm):
             "place",
             "equipment",
             "group_choice",
+            "evening_individual",
             "department",
             "is_active",
         ]

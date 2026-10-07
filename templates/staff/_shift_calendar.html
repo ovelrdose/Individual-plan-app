@@ -1,6 +1,5 @@
 {# Календарь смен на месяц (TZ.md, FR-STF-4). Любое действие возвращает фрагмент целиком. #}
 <div id="shift-calendar">
-  {% include "scheduling/_rebuild_notice.html" %}
   <div class="d-flex align-items-center gap-2 mb-2">
     <a class="btn btn-sm btn-outline-secondary" href="?month={{ previous_month }}" title="Предыдущий месяц"
        hx-get="{% url 'staff:shifts' %}?month={{ previous_month }}" hx-select="#shift-calendar"

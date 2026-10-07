@@ -1,7 +1,7 @@
 """Инструкторы: пары, смены, распорядок и разовые блоки (TZ.md §4.6).
 
 Смены и распорядок — ресурс центра: правят специалист ФР любого отделения и администратор
-(решение 46, 03-architecture.md §8), врач — нет. Права проверяются здесь, а не в представлениях.
+(TZ.md §3), врач — нет. Права проверяются здесь, а не в представлениях.
 Все изменения сохраняются через save() с ``_history_user`` — так автор попадает в журнал (NFR-5).
 """
 
@@ -9,11 +9,11 @@ import calendar
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.db.models import Q, QuerySet
+from django.db.models import Q
 
 from apps.accounts.access import has_role_anywhere
 from apps.accounts.models import Role, User
@@ -26,6 +26,7 @@ from .models import (
     InstructorDuty,
     ShiftException,
     ShiftPattern,
+    ShiftPatternKind,
 )
 
 
@@ -55,7 +56,7 @@ def set_partner(instructor: Instructor, partner: Instructor | None) -> None:
 def save_instructor(instructor: Instructor, partner: Instructor | None, *, relink: bool) -> None:
     """Сохранить инструктора из админки (в том числе порядок в списке): участники пары
     блокируются одним запросом до первого изменения — тот же порядок «по pk», что у подбора
-    расписания, иначе правка пары и подбор могли бы ждать друг друга (03-architecture.md §4.5).
+    расписания, иначе правка пары и подбор могли бы ждать друг друга.
     ``relink`` — напарника меняли: пару ставит ``set_partner``.
     """
     if partner is not None and partner.pk == instructor.pk:
@@ -379,62 +380,69 @@ def toggle_shift_day(user: User, instructor: Instructor, day: date) -> ShiftExce
 # --- Распорядок и разовые блоки (FR-STF-5) -------------------------------------------------
 
 
-@transaction.atomic
-def save_duty(user: User, duty: InstructorDuty) -> InstructorDuty:
-    """Добавить или изменить постоянную обязанность инструктора."""
-    require_staff_manager(user)
-    Instructor.objects.select_for_update().get(pk=duty.instructor_id)
-    return _save(user, duty)
+@dataclass(frozen=True)
+class DutyCell:
+    """Слот инструктора на экране «Распорядок» в дату."""
+
+    slot: InstructorSlot
+    busy: domain.Busy | None
+    # Постоянный распорядок снят на эту дату разовым блоком.
+    cleared: bool
+    # Слот внутри смены: 2/2 — 8:00–20:00, остальные — 8:00–17:00.
+    in_shift: bool
 
 
-@transaction.atomic
-def end_duty(user: User, duty: InstructorDuty, valid_to: date) -> InstructorDuty:
-    """Завершить обязанность: последний день, когда она действует."""
+@dataclass(frozen=True)
+class DutyRow:
+    instructor: Instructor
+    pattern: domain.Pattern | None
+    hours: tuple[time, time] | None
+    working: bool
+    cells: list[DutyCell]
+
+    @property
+    def pattern_text(self) -> str:
+        return ShiftPatternKind(self.pattern).label if self.pattern else ""
+
+
+def duty_grid(user: User, day: date) -> tuple[list[InstructorSlot], list[DutyRow]]:
+    """Распорядок всех инструкторов в дату: строки — инструкторы, ячейки — слоты (FR-STF-5).
+
+    Как календарь «Смен»: напарники 2/2 рядом; в ячейке — постоянный распорядок и разовые
+    блоки этой даты. Слоты вне смены инструктора недоступны.
+    """
     require_staff_manager(user)
-    if valid_to < duty.valid_from:
-        raise StaffError(
-            f"Обязанность действует с {duty.valid_from:%d.%m.%Y} — завершить раньше нельзя."
+    slots = list(InstructorSlot.objects.all())
+    instructors = active_instructors()
+    calendars = instructor_calendars(instructors, day, day)
+    rows = []
+    for item in instructors:
+        found = calendars[item.pk]
+        busy = found.plan_on(day)
+        permanent = domain.busy_slots(found.duties, (), day, True, found.slots)
+        rule = found.pattern_on(day)
+        rows.append(
+            DutyRow(
+                instructor=item,
+                pattern=rule.pattern if rule else None,
+                hours=domain.shift_hours(rule.pattern) if rule else None,
+                working=found.is_working(day),
+                cells=[
+                    DutyCell(
+                        slot,
+                        busy.get(slot.pk),
+                        slot.pk in permanent and slot.pk not in busy,
+                        rule is not None
+                        and domain.slot_in_shift(rule.pattern, slot.start, slot.end),
+                    )
+                    for slot in slots
+                ],
+            )
         )
-    duty.valid_to = valid_to
-    return _save(user, duty)
+    return slots, rows
 
 
-@transaction.atomic
-def save_block(user: User, block: InstructorBlock) -> InstructorBlock:
-    """Разовый блок на дату: другая обязанность в слоте или «снять распорядок»."""
-    require_staff_manager(user)
-    Instructor.objects.select_for_update().get(pk=block.instructor_id)
-    existing = InstructorBlock.objects.filter(
-        instructor_id=block.instructor_id, date=block.date, slot_id=block.slot_id
-    ).exclude(pk=block.pk)
-    if existing.exists():
-        raise StaffError(f"На {block.date:%d.%m.%Y} в слоте {block.slot} уже есть разовый блок.")
-    return _save(user, block)
-
-
-@transaction.atomic
-def delete_block(user: User, block: InstructorBlock) -> None:
-    """Удалить разовый блок — день снова идёт по распорядку. Удаление попадает в журнал."""
-    require_staff_manager(user)
-    block._history_user = user
-    block.delete()
-
-
-def duties_of(instructor: Instructor) -> QuerySet[InstructorDuty]:
-    return instructor.duties.select_related("slot", "group_session__procedure").order_by(
-        "slot__start", "valid_from"
-    )
-
-
-def upcoming_blocks(instructor: Instructor, today: date) -> QuerySet[InstructorBlock]:
-    return instructor.blocks.filter(date__gte=today).select_related(
-        "slot", "group_session__procedure"
-    )
-
-
-def _save[T: (ShiftPattern, ShiftException, InstructorDuty, InstructorBlock)](
-    user: User, item: T
-) -> T:
+def _save[T: (ShiftPattern, ShiftException)](user: User, item: T) -> T:
     item.full_clean()
     item._history_user = user
     item.save()

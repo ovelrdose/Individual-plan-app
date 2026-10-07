@@ -62,7 +62,10 @@ def _check_fits(mapping: CardMapping, data: CardData) -> None:
 def _fill_header(sheet: Worksheet, mapping: CardMapping, data: CardData) -> None:
     sheet[mapping.department] = data.department
     sheet[mapping.full_name] = data.full_name
-    sheet[mapping.sex_age] = sex_age_text(data.sex, data.age)
+    parts = [sex_age_text(data.sex, data.age)]
+    if data.withdrawn_on is not None:
+        parts.append(f"выбыл {data.withdrawn_on:%d.%m}")
+    sheet[mapping.sex_age] = ", ".join(part for part in parts if part)
     sheet[mapping.doctor] = data.doctor
 
 
@@ -90,5 +93,5 @@ def _fill_date_blocks(sheet: Worksheet, mapping: CardMapping, data: CardData) ->
         for row, procedure in zip(block.procedure_rows, data.procedures, strict=False):
             sheet[f"{mapping.procedure_label_col}{row}"] = procedure.label
             for column, day in zip(block.date_columns, block_dates, strict=False):
-                if not procedure.is_active(day):
+                if day in data.rest_dates or not procedure.is_active(day):
                     sheet[f"{column}{row}"].fill = INACTIVE_FILL

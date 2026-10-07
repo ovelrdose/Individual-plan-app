@@ -22,7 +22,6 @@ from apps.programs.models import Prescription, Program
 from apps.staff.models import Instructor
 from apps.staff.services import instructor_calendars
 
-from .domain import is_weekend
 from .domain.validate import (
     Candidate,
     Context,
@@ -32,7 +31,7 @@ from .domain.validate import (
     ViolationCode,
     validate,
 )
-from .models import Booking, BookingKind, BookingSource, RemovedSession
+from .models import GROUP_BOOKING_KINDS, Booking, BookingKind, BookingSource, RemovedSession
 from .services import replan
 
 
@@ -141,7 +140,7 @@ def minutes(value: time) -> int:
 def is_active_on(prescription: Prescription, program: Program, day: date) -> bool:
     start = prescription.start_date or program.start_date
     return (
-        program.start_date <= day <= program.end_date
+        program.is_therapy_day(day)
         and start <= day
         and (prescription.cancel_date is None or day < prescription.cancel_date)
     )
@@ -160,6 +159,8 @@ def check(
     equipment: Equipment | None = None,
 ) -> list[Violation]:
     """Нарушения кандидата: пациент, инструктор (для индивидуального), тренажёр."""
+    if program.is_absent(day):
+        raise EditError(f"Пациент выбыл — {day:%d.%m} у него нет занятий.")
     others = program.bookings.filter(date=day).select_related("procedure")
     if moved is not None and moved.pk:
         others = others.exclude(pk=moved.pk)
@@ -180,21 +181,11 @@ def check(
     if individual and instructor is not None and slot is not None:
         calendar = instructor_calendars([instructor], day, day)[instructor.pk].day(day)
         busy = calendar.busy.get(slot.pk)
-        occupant = (
-            Booking.objects.filter(
-                date=day, kind=BookingKind.INDIVIDUAL, instructor=instructor, slot=slot
-            )
-            .exclude(pk=moved.pk if moved is not None and moved.pk else None)
-            .select_related("program")
-            .first()
-        )
+        # Пациентов в ячейке может быть несколько (FR-SCH-10): занятость — только обязанности.
         context = _replace(
             context,
             instructor_working=calendar.working,
             instructor_busy=busy.text if busy else "",
-            instructor_patient=(
-                f"{occupant.program.room}п {occupant.program.surname}" if occupant else ""
-            ),
         )
     if equipment is not None:
         taken = (
@@ -261,11 +252,8 @@ def save_manual(user: User, booking: Booking, reason: str = "") -> Booking:
 
 @dataclass(frozen=True)
 class Target:
-    """Куда переставить занятие: для индивидуального — инструктор и слот (в выходной — только
-    слот), для группы — занятие группы, для тренажёра — время начала."""
+    """Куда переставить занятие: для группы — занятие группы, для тренажёра — время начала."""
 
-    instructor: Instructor | None = None
-    slot: InstructorSlot | None = None
     session: GroupSession | None = None
     start: time | None = None
 
@@ -285,6 +273,7 @@ def edit_booking(
     Эта дата должна пройти проверку — иначе ничего не сохраняется. Следующие даты, где
     вариант невозможен (инструктор не работает, время занято), пропускаются и
     перечисляются. Нарушения «с подтверждением» сохраняются только с причиной."""
+    _require_not_individual(booking)
     program = lock_program(booking.program)
     require_edit(user, program)
     booking = fresh(program, booking, version)
@@ -344,29 +333,7 @@ def _plan(
     """Новое положение занятия в его дату и нарушения. Изменения — в apply()."""
     kind = booking.kind
     day = booking.date
-    if kind == BookingKind.INDIVIDUAL:
-        slot = target.slot or booking.slot
-        if is_weekend(day):
-            instructor = None
-        else:
-            instructor = _working_member(target.instructor or booking.instructor, day, slot)
-        violations = check(
-            program,
-            booking.prescription,
-            day,
-            slot.start,
-            slot.end,
-            moved=booking,
-            instructor=instructor,
-            slot=slot,
-        )
-
-        def apply() -> None:
-            booking.instructor, booking.slot = instructor, slot
-            booking.start, booking.end = slot.start, slot.end
-
-        return apply, violations
-    if kind in (BookingKind.LFK_GROUP, BookingKind.POOL):
+    if kind in GROUP_BOOKING_KINDS:
         session = target.session
         if session is None or session.procedure_id != booking.procedure_id:
             raise EditError("Выберите время группы.")
@@ -406,22 +373,15 @@ def _plan(
     raise EditError("Это занятие вручную не правится.")
 
 
-def _working_member(instructor: Instructor | None, day: date, slot: InstructorSlot) -> Instructor:
-    """Инструктор в дату: он сам, а если не работает — работающий напарник по 2/2 (пара —
-    одна команда, «эта и все следующие» продолжает её)."""
-    if instructor is None:
-        raise EditError("Выберите инструктора.")
-    people = [instructor] + ([instructor.partner] if instructor.partner_id else [])
-    calendars = instructor_calendars(people, day, day)
-    for person in people:
-        if calendars[person.pk].is_working(day):
-            return person
-    raise EditError(f"{instructor.short_name} {day:%d.%m} не работает.")
+def _require_not_individual(booking: Booking) -> None:
+    if booking.kind == BookingKind.INDIVIDUAL:
+        raise EditError("Индивидуальные занятия правятся в шахматке.")
 
 
 @transaction.atomic
 def remove_booking(user: User, booking: Booking, version: int, *, scope: str = ONE) -> EditResult:
     """Убрать занятие на дату или «эту и все следующие»: подбор его не вернёт (решение 57)."""
+    _require_not_individual(booking)
     program = lock_program(booking.program)
     require_edit(user, program)
     booking = fresh(program, booking, version)
@@ -450,6 +410,7 @@ def restore_date(user: User, prescription: Prescription, day: date) -> None:
 def unpin(user: User, booking: Booking, version: int, *, scope: str = ONE) -> EditResult:
     """«Открепить» (FR-SCH-10): подбор снова распоряжается занятием (этой даты или всех
     закреплённых занятий назначения начиная с неё)."""
+    _require_not_individual(booking)
     program = lock_program(booking.program)
     require_edit(user, program)
     booking = fresh(program, booking, version)

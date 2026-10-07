@@ -1,3 +1,0 @@
-{# Поля «группа» и «подпись» зависят от вида — показываются Alpine (x-model="kind" у вида). #}
-<div class="{{ col|default:'col-3' }}" x-show="kind === 'GROUP_LEAD'" x-cloak>{% include "includes/form_field.html" with field=form.group_session wrapper_class="mb-0" %}</div>
-<div class="{{ col|default:'col-3' }}" x-show="kind === 'OTHER'" x-cloak>{% include "includes/form_field.html" with field=form.label wrapper_class="mb-0" %}</div>

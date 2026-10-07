@@ -129,3 +129,9 @@ def test_card_schedule_follows_slot_grid(program):
         (time(9, 10), ""),
         (time(9, 50), ""),
     ]
+
+
+def test_card_marks_admission_and_discharge_as_rest_dates(program):
+    data = build_card_data(program)
+
+    assert data.rest_dates == {date(2026, 10, 5), date(2026, 10, 15)}

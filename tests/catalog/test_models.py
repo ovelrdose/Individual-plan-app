@@ -126,3 +126,20 @@ class TestInstructorSlot:
         slot.end = time(9, 45)
 
         slot.full_clean()
+
+
+class TestEveningIndividual:
+    """Мото-Л / Артромот — признак у строки карты, а не отдельное занятие (FR-SCH-8)."""
+
+    def test_only_for_card_only(self):
+        with pytest.raises(ValidationError) as error:
+            procedure(evening_individual=True).full_clean()
+        assert "evening_individual" in error.value.message_dict
+
+    def test_card_only_is_fine(self):
+        procedure(
+            name="Мото-Л",
+            card_label="Мото-Л",
+            kind=ProcedureKind.CARD_ONLY,
+            evening_individual=True,
+        ).full_clean()

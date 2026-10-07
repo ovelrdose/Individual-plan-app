@@ -1,10 +1,10 @@
-"""Экраны «Смены» (FR-STF-4) и «Распорядок инструкторов» (FR-STF-5).
+"""Экраны «Смены» (FR-STF-4) и «Распорядок инструкторов» (FR-STF-5) — сетки с кликом по ячейке.
 
 Представления тонкие: права и правила — в services. Действия HTMX возвращают фрагмент целиком
 (``hx-swap="outerHTML"``), ошибки форм — в том же фрагменте со статусом 200.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 from django.core.exceptions import ValidationError
 from django.http import Http404, HttpRequest, HttpResponse
@@ -12,11 +12,12 @@ from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from apps.scheduling import staff_changes
+from apps.catalog.models import GroupSession, InstructorSlot
+from apps.scheduling import board, staff_changes
 
 from . import services
-from .forms import BlockForm, DutyForm, EndDutyForm, ShiftPatternForm
-from .models import Instructor, InstructorBlock, InstructorDuty
+from .forms import ShiftPatternForm, board_sessions
+from .models import BlockKind, Instructor
 
 MONTHS = [
     "январь", "февраль", "март", "апрель", "май", "июнь",
@@ -41,8 +42,8 @@ def shift_toggle(request: HttpRequest, pk: int) -> HttpResponse:
     except ValueError as error:
         raise Http404("Неверная дата.") from error
     services.toggle_shift_day(request.user, instructor, day)
-    change = staff_changes.after_shift_toggle(request.user, instructor, day)
-    return _shifts_response(request, (day.year, day.month), rebuild=change)
+    staff_changes.after_shift_toggle(request.user, instructor, day)
+    return _shifts_response(request, (day.year, day.month))
 
 
 def shift_pattern(request: HttpRequest, pk: int) -> HttpResponse:
@@ -58,10 +59,10 @@ def shift_pattern(request: HttpRequest, pk: int) -> HttpResponse:
             except (services.StaffError, ValidationError) as error:
                 _add_errors(form, error)
             else:
-                change = staff_changes.after_pattern(
+                staff_changes.after_pattern(
                     request.user, instructor, form.cleaned_data["valid_from"]
                 )
-                return _shifts_response(request, month, rebuild=change)
+                return _shifts_response(request, month)
     else:
         current = services.current_pattern(instructor, timezone.localdate())
         form = ShiftPatternForm(
@@ -111,147 +112,71 @@ def _shifts_response(request: HttpRequest, month: tuple[int, int], **extra) -> H
 
 def duties(request: HttpRequest) -> HttpResponse:
     services.require_staff_manager(request.user)
-    instructors = services.active_instructors()
-    selected = None
-    pk = request.GET.get("instructor", "")
-    if pk.isdigit():
-        selected = next((item for item in instructors if item.pk == int(pk)), None)
-        if selected is None:
-            raise Http404("Инструктор не найден.")
-    elif instructors:
-        selected = instructors[0]
-    context = {"instructors": instructors, "selected": selected}
-    if selected is not None:
-        context |= _duties_context(request, selected) | _blocks_context(request, selected)
-    return render(request, "staff/duties.html", context)
+    return render(request, "staff/duties.html", _duties_context(request, _day(request)))
 
 
 @require_POST
-def duty_add(request: HttpRequest, pk: int) -> HttpResponse:
+def duty_paint(request: HttpRequest) -> HttpResponse:
+    """Клик по ячейке распорядка выбранной «кистью» (FR-STF-5), как клик в «Сменах»."""
     services.require_staff_manager(request.user)
-    instructor = get_object_or_404(Instructor, pk=pk, is_active=True)
-    form = DutyForm(request.POST, instance=InstructorDuty(instructor=instructor), prefix="duty")
-    change = None
-    if form.is_valid() and _run(form, services.save_duty, request.user, form.instance):
-        change = staff_changes.after_duty(request.user, form.instance)
-        form = None
-    return _duties_response(request, instructor, add_form=form, rebuild=change)
-
-
-def duty_edit(request: HttpRequest, pk: int) -> HttpResponse:
-    services.require_staff_manager(request.user)
-    duty = get_object_or_404(InstructorDuty, pk=pk, instructor__is_active=True)
-    form = DutyForm(request.POST or None, instance=duty, prefix="edit")
-    if (
-        request.method == "POST"
-        and form.is_valid()
-        and _run(form, services.save_duty, request.user, duty)
-    ):
-        change = staff_changes.after_duty(request.user, duty)
-        return _duties_response(request, duty.instructor, rebuild=change)
-    return _duties_response(request, duty.instructor, edit_form=form, editing=duty)
-
-
-@require_POST
-def duty_end(request: HttpRequest, pk: int) -> HttpResponse:
-    services.require_staff_manager(request.user)
-    duty = get_object_or_404(InstructorDuty, pk=pk, instructor__is_active=True)
-    form = EndDutyForm(request.POST, prefix=f"end{duty.pk}")
-    error = ""
-    if form.is_valid():
-        try:
-            services.end_duty(request.user, duty, form.cleaned_data["valid_to"])
-        except (services.StaffError, ValidationError) as exc:
-            error = _text(exc)
-    else:
-        error = "Укажите последний день."
-    if error:
-        duty.refresh_from_db()
-    return _duties_response(request, duty.instructor, end_error=error, end_for=duty)
-
-
-@require_POST
-def block_add(request: HttpRequest, pk: int) -> HttpResponse:
-    services.require_staff_manager(request.user)
-    instructor = get_object_or_404(Instructor, pk=pk, is_active=True)
-    form = BlockForm(request.POST, instance=InstructorBlock(instructor=instructor), prefix="block")
-    change = None
-    if form.is_valid() and _run(form, services.save_block, request.user, form.instance):
-        change = staff_changes.after_block(request.user, form.instance)
-        form = None
-    return _blocks_response(request, instructor, block_form=form, rebuild=change)
-
-
-@require_POST
-def block_delete(request: HttpRequest, pk: int) -> HttpResponse:
-    services.require_staff_manager(request.user)
-    block = get_object_or_404(InstructorBlock, pk=pk, instructor__is_active=True)
-    instructor = block.instructor
-    services.delete_block(request.user, block)
-    return _blocks_response(request, instructor)
-
-
-def _duties_context(
-    request: HttpRequest,
-    instructor: Instructor,
-    *,
-    add_form: DutyForm | None = None,
-    edit_form: DutyForm | None = None,
-    editing: InstructorDuty | None = None,
-    end_error: str = "",
-    end_for: InstructorDuty | None = None,
-    rebuild=None,
-) -> dict:
-    today = timezone.localdate()
-    if add_form is None:
-        add_form = DutyForm(prefix="duty", initial={"valid_from": today})
-    return {
-        "selected": instructor,
-        "duties": services.duties_of(instructor),
-        "add_form": add_form,
-        "edit_form": edit_form,
-        "editing": editing,
-        "end_error": end_error,
-        "end_for": end_for,
-        "today": today,
-        "rebuild": rebuild,
-    }
-
-
-def _blocks_context(
-    request: HttpRequest,
-    instructor: Instructor,
-    *,
-    block_form: BlockForm | None = None,
-    rebuild=None,
-) -> dict:
-    today = timezone.localdate()
-    if block_form is None:
-        block_form = BlockForm(prefix="block", initial={"date": today})
-    return {
-        "selected": instructor,
-        "blocks": services.upcoming_blocks(instructor, today),
-        "block_form": block_form,
-        "rebuild": rebuild,
-    }
-
-
-def _duties_response(request: HttpRequest, instructor: Instructor, **kwargs) -> HttpResponse:
-    return render(request, "staff/_duties.html", _duties_context(request, instructor, **kwargs))
-
-
-def _blocks_response(request: HttpRequest, instructor: Instructor, **kwargs) -> HttpResponse:
-    return render(request, "staff/_blocks.html", _blocks_context(request, instructor, **kwargs))
-
-
-def _run(form, action, *args) -> bool:
-    """Вызывает сервис; понятные ошибки — в форму, а не 500."""
+    day = _day(request)
+    instructor = get_object_or_404(
+        Instructor, pk=_int(request.POST.get("instructor")), is_active=True
+    )
+    slot = get_object_or_404(InstructorSlot, pk=_int(request.POST.get("slot")))
+    kind = request.POST.get("kind", "")
+    session = None
+    if kind == BlockKind.GROUP_LEAD and request.POST.get("session"):
+        session = get_object_or_404(
+            GroupSession, pk=_int(request.POST.get("session")), is_active=True
+        )
+    message, error = "", ""
     try:
-        action(*args)
-    except (services.StaffError, ValidationError) as error:
-        _add_errors(form, error)
-        return False
-    return True
+        message = board.paint_duty(
+            request.user,
+            instructor,
+            slot,
+            day,
+            kind,
+            once=request.POST.get("mode") == "once",
+            label=request.POST.get("label", ""),
+            group_session=session,
+        )
+    except board.BoardError as exc:
+        error = str(exc)
+    return render(
+        request,
+        "staff/_duty_grid.html",
+        _duties_context(request, day, message=message, error=error),
+    )
+
+
+def _day(request: HttpRequest) -> date:
+    value = request.GET.get("day") or request.POST.get("day") or ""
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return timezone.localdate()
+
+
+def _int(value: str | None) -> int:
+    return int(value) if value and value.isdigit() else 0
+
+
+def _duties_context(request: HttpRequest, day: date, **extra) -> dict:
+    slots, rows = services.duty_grid(request.user, day)
+    return {
+        "day": day,
+        "slots": slots,
+        "rows": rows,
+        "previous_day": day - timedelta(days=1),
+        "next_day": day + timedelta(days=1),
+        "today": timezone.localdate(),
+        "kinds": [(kind.value, kind.label) for kind in board.CELL_BLOCK_KINDS],
+        "free": board.FREE,
+        "sessions": board_sessions(),
+        **extra,
+    }
 
 
 def _add_errors(form, error: Exception) -> None:

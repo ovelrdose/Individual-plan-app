@@ -1,4 +1,4 @@
-{% load static %}<!doctype html>
+{% load static assets %}<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
@@ -6,11 +6,21 @@
   <title>{% block title %}Программа реабилитации{% endblock %}</title>
   <link rel="stylesheet" href="{% static 'vendor/bootstrap/css/bootstrap.min.css' %}">
   <link rel="stylesheet" href="{% static 'vendor/bootstrap-icons/bootstrap-icons.min.css' %}">
-  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  <link rel="stylesheet" href="{% asset 'css/app.css' %}">
+  {% comment %}
+    Все скрипты — здесь и загружаются один раз. htmx не выполняет <script> из ответов: при
+    переходе через hx-boost он вставлял бы в body и скрипты из head новой страницы — Bootstrap
+    подключался бы снова, и меню открывалось и тут же закрывалось.
+  {% endcomment %}
+  <meta name="htmx-config" content='{"allowScriptTags": false}'>
+  <script src="{% static 'vendor/bootstrap/js/bootstrap.bundle.min.js' %}" defer></script>
   <script src="{% static 'vendor/htmx/htmx.min.js' %}" defer></script>
   <script src="{% static 'vendor/alpinejs/alpine.min.js' %}" defer></script>
+  <script src="{% asset 'js/live.js' %}" defer></script>
+  <script src="{% asset 'js/board.js' %}" defer></script>
 </head>
-<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+{# hx-boost: переходы и формы без перезагрузки страницы (NFR-11); файлы и админка — обычные ссылки. #}
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}' hx-boost="true" data-live-url="{% url 'live_events' %}">
   {% block navbar %}
     {% if user.is_authenticated %}{% include "includes/navbar.html" %}{% endif %}
   {% endblock %}
@@ -20,6 +30,5 @@
     {% block content %}{% endblock %}
   </main>
 
-  <script src="{% static 'vendor/bootstrap/js/bootstrap.bundle.min.js' %}"></script>
 </body>
 </html>

@@ -159,3 +159,31 @@ def test_procedure_active_range():
     assert procedure.is_active(date(2026, 10, 8))
     assert not procedure.is_active(date(2026, 10, 9))
     assert CardProcedure("Массаж").is_active(date(2026, 10, 6))
+
+
+@pytest.mark.parametrize("shrm", [3, 4, 5])
+def test_rest_dates_are_grey_in_every_row(shrm):
+    """День поступления и день выписки заштрихованы во всех строках (FR-SCH-1, FR-CRD-2)."""
+    mapping, data = MAPPINGS[shrm], sample_card(shrm)
+    first, last = data.course_dates[0], data.course_dates[-1]
+    data = replace(
+        data,
+        procedures=(CardProcedure("Алмаг"),),
+        rest_dates=frozenset({first, last}),
+    )
+    sheet = render(shrm, data)
+
+    dates = iter(data.course_dates)
+    for block in mapping.date_blocks:
+        block_dates = [next(dates) for _ in block.date_columns]
+        row = block.procedure_rows[0]
+        for column, day in zip(block.date_columns, block_dates, strict=True):
+            assert is_grey(sheet[f"{column}{row}"]) == (day in (first, last))
+
+
+def test_withdrawn_note_after_sex_and_age():
+    """Выбывший (FR-PRG-9): «выбыл ДД.ММ» в строке пола и возраста."""
+    data = replace(sample_card(4), withdrawn_on=date(2026, 10, 7))
+    sheet = render(4, data)
+    value = sheet[MAPPINGS[4].sex_age].value
+    assert value.startswith(f"({data.sex}) {data.age} ") and value.endswith(", выбыл 07.10")

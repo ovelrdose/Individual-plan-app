@@ -1,6 +1,3 @@
-from datetime import date
-
-from django.conf import settings
 from django.contrib.postgres.constraints import ExclusionConstraint
 from django.contrib.postgres.fields import DateTimeRangeField, RangeOperators
 from django.db import models
@@ -25,9 +22,14 @@ class BookingPeriod(Func):
 
 class BookingKind(models.TextChoices):
     LFK_GROUP = ProcedureKind.LFK_GROUP
+    DS_GROUP = ProcedureKind.DS_GROUP
     POOL = ProcedureKind.POOL
     INDIVIDUAL = ProcedureKind.INDIVIDUAL
     EQUIPMENT = ProcedureKind.EQUIPMENT
+
+
+# Занятия по расписанию групп: время выбирается из занятий группы (GroupSession).
+GROUP_BOOKING_KINDS = (BookingKind.LFK_GROUP, BookingKind.DS_GROUP, BookingKind.POOL)
 
 
 class BookingSource(models.TextChoices):
@@ -110,28 +112,18 @@ class Booking(models.Model):
         ordering = ["date", "start"]
         constraints = [
             models.CheckConstraint(condition=Q(end__gt=F("start")), name="booking_end_after_start"),
-            # Слот есть ровно у индивидуальных занятий (FR-SCH-1), инструктор — у них же, кроме
-            # субботы и воскресенья: в выходные занятие в то же время ведёт дежурный 2/2,
-            # инструктор не назначается (решение 56).
+            # Слот и инструктор есть ровно у индивидуальных занятий: они стоят только в шахматке
+            # по будням (TZ.md, FR-SCH-3). В одной ячейке может быть сколько угодно пациентов
+            # (FR-SCH-4, FR-SCH-10), поэтому уникальности «инструктор + дата + слот» нет.
             models.CheckConstraint(
                 condition=(
-                    (
-                        Q(kind=ProcedureKind.INDIVIDUAL, slot__isnull=False)
-                        & (Q(instructor__isnull=False) | Q(date__iso_week_day__gte=6))
-                    )
+                    Q(kind=ProcedureKind.INDIVIDUAL, slot__isnull=False, instructor__isnull=False)
                     | (
                         ~Q(kind=ProcedureKind.INDIVIDUAL)
                         & Q(instructor__isnull=True, slot__isnull=True)
                     )
                 ),
                 name="booking_instructor_only_individual",
-            ),
-            # Один инструктор — один пациент в слоте (FR-SCH-2).
-            models.UniqueConstraint(
-                fields=["instructor", "date", "slot"],
-                condition=Q(kind=ProcedureKind.INDIVIDUAL),
-                name="booking_instructor_slot_unique",
-                violation_error_message="У инструктора уже есть пациент в этом слоте.",
             ),
             ExclusionConstraint(
                 name="booking_patient_not_in_two_places",
@@ -156,6 +148,56 @@ class Booking(models.Model):
         if self.group_session is not None:
             return self.group_session.effective_place
         return self.procedure.place
+
+
+class BoardDay(models.Model):
+    """Шахматка индивидуальных на будний день составлена (TZ.md, FR-SCH-5).
+
+    Создаётся сама — на сегодня и на следующий будний день — копированием предыдущей
+    составленной шахматки. Дальше следующего будного дня расписание не составляется.
+    """
+
+    date = models.DateField("дата", unique=True)
+    created_at = models.DateTimeField("когда составлена", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "шахматка на дату"
+        verbose_name_plural = "шахматки на дату"
+        ordering = ["-date"]
+
+    def __str__(self) -> str:
+        return f"Шахматка {self.date:%d.%m.%Y}"
+
+
+class BoardPatient(models.Model):
+    """Пациент в шахматке на дату вне сетки: блоки «Не распределены» и «Отменены» (FR-SCH-11).
+
+    ``unplaced`` — занятия, которым не нашлось места (переполнение, инструктор не вышел),
+    ``cancelled`` — убранные специалистом из сетки: переходят на следующие дни, пока пациент
+    лечится. ``edited`` — пациента в эту дату правили вручную: правка сегодняшней шахматки его
+    завтрашнее положение уже не меняет (FR-SCH-12).
+    """
+
+    date = models.DateField("дата")
+    program = models.ForeignKey(
+        Program, on_delete=models.CASCADE, related_name="board_days", verbose_name="программа"
+    )
+    unplaced = models.PositiveSmallIntegerField("не распределено", default=0)
+    cancelled = models.PositiveSmallIntegerField("отменено", default=0)
+    edited = models.BooleanField("правили вручную", default=False)
+
+    history = HistoricalRecords()
+
+    class Meta:
+        verbose_name = "пациент в шахматке"
+        verbose_name_plural = "пациенты в шахматке"
+        ordering = ["date"]
+        constraints = [
+            models.UniqueConstraint(fields=["date", "program"], name="board_patient_unique"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.date:%d.%m} {self.program}"
 
 
 class RemovedSession(models.Model):
@@ -188,52 +230,3 @@ class RemovedSession(models.Model):
 
     def __str__(self) -> str:
         return f"{self.date:%d.%m} {self.prescription}: убрано {self.units}"
-
-
-class StaffChange(models.Model):
-    """Сводка перестройки после изменения смены или распорядка инструктора (FR-SCH-13).
-
-    ``items`` — по затронутому занятию: программа, дата, было («инструктор, время») и стало
-    (или ``None`` — поставить не удалось), закреплено ли вручную, по желанию ли пациента.
-    По сводке специалист проверяет замены и может «Вернуть как было».
-    """
-
-    created_at = models.DateTimeField("когда", auto_now_add=True)
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        related_name="+",
-        verbose_name="кто",
-    )
-    instructor = models.ForeignKey(
-        Instructor, on_delete=models.PROTECT, related_name="changes", verbose_name="инструктор"
-    )
-    title = models.CharField("что изменилось", max_length=200)
-    items = models.JSONField("занятия", default=list)
-    reverted_at = models.DateTimeField("возвращено", null=True, blank=True)
-    reverted_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="+",
-        verbose_name="кто вернул",
-    )
-
-    class Meta:
-        verbose_name = "перестройка расписания"
-        verbose_name_plural = "перестройки расписания"
-        ordering = ["-created_at"]
-
-    def __str__(self) -> str:
-        return f"{self.created_at:%d.%m.%Y %H:%M} {self.title}"
-
-    @property
-    def unplaced(self) -> int:
-        return sum(1 for item in self.items if item.get("after") is None)
-
-    @property
-    def rows(self) -> list[dict]:
-        """Строки сводки с датой-объектом — для показа «05.10»."""
-        return [item | {"day": date.fromisoformat(item["date"])} for item in self.items]

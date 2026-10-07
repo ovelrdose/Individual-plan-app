@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 
-from .engine import ADJACENT_GAP, hhmm
+from .engine import hhmm
+from .model import ADJACENT_GAP
 
 
 class ViolationCode(StrEnum):

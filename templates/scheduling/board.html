@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static assets %}
 
 {% block title %}Шахматка {{ board.day|date:"d.m.Y" }}{% endblock %}
 
@@ -9,33 +10,31 @@
        title="Предыдущий день"><i class="bi bi-chevron-left"></i></a>
     <form method="get" class="d-flex gap-1">
       <label for="board-date" class="visually-hidden">Дата</label>
-      <input id="board-date" type="date" name="date" value="{{ board.day|date:'Y-m-d' }}"
+      <input id="board-date" type="date" name="date" value="{{ board.day|date:'Y-m-d' }}" max="{{ board.following|date:'Y-m-d' }}"
              class="form-control form-control-sm" onchange="this.form.submit()">
       <noscript><button type="submit" class="btn btn-sm btn-outline-secondary">Показать</button></noscript>
     </form>
-    <a class="btn btn-sm btn-outline-secondary" href="?date={{ board.next|date:'Y-m-d' }}"
-       title="Следующий день"><i class="bi bi-chevron-right"></i></a>
+    {% if board.has_next %}
+      <a class="btn btn-sm btn-outline-secondary" href="?date={{ board.next|date:'Y-m-d' }}"
+         title="Следующий день"><i class="bi bi-chevron-right"></i></a>
+    {% endif %}
     <a class="btn btn-sm btn-link" href="{% url 'scheduling:board' %}">Сегодня</a>
+    <a class="btn btn-sm btn-link px-0" href="{% url 'scheduling:board' %}?date={{ board.following|date:'Y-m-d' }}">{{ board.following_label }}</a>
     <span class="fw-semibold ms-2">{{ board.day|date:"l, j E Y" }}</span>
-    <a class="btn btn-sm btn-outline-success ms-auto" href="{% url 'scheduling:board_export' %}?date={{ board.day|date:'Y-m-d' }}">
+    <a class="btn btn-sm btn-outline-success ms-auto" hx-boost="false" href="{% url 'scheduling:board_export' %}?date={{ board.day|date:'Y-m-d' }}">
       <i class="bi bi-file-earmark-excel"></i> Выгрузить в Excel
     </a>
   </div>
 
   <p class="text-body-secondary small mb-2">
     Колонки — инструкторы в смене, пара 2/2 — одна колонка, в ячейке работающий в этот день.
-    Серым — «Метод. работа», ведение групп и другие блоки. <i class="bi bi-pin-angle"></i> — поставлено вручную,
-    подбор такое занятие не меняет.
-    {% if board.can_edit %}Чтобы поставить, перенести или убрать пациента или блок, нажмите
-      <i class="bi bi-pencil"></i> в ячейке.{% endif %}
+    Серым — постоянная занятость: «Метод. работа», ведение групп и другие блоки. Шахматка на
+    сегодня и на следующий будний день составляется сама: выписанные уходят, остальные остаются
+    на своих местах, новые пациенты расставляются по свободным окнам.
+    {% if board.can_edit %}Нажмите на ячейку, чтобы поставить пациента (сначала в списке — «Не
+      распределены» и «Отменены»), поставить пометку или блок. Пациента можно перетащить мышью в
+      другую ячейку, а из блоков над сеткой — в свободное время.{% endif %}
   </p>
-
-  {% if board.is_weekend %}
-    <div class="alert alert-info py-2">
-      Выходной: индивидуальные занятия ведут дежурные 2/2 без шахматки — пациенты занимаются в своё
-      обычное время (список под таблицей), отметку ставят в карте.
-    </div>
-  {% endif %}
 
   <div id="cell-panel"></div>
   {% include "scheduling/_board.html" %}

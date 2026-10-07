@@ -1,18 +1,21 @@
 """Импорт листа назначений в программу (TZ.md §6.3)."""
 
+from dataclasses import dataclass
 from datetime import date
+from enum import StrEnum
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Exists, OuterRef
 
 from apps.accounts.access import require_role
 from apps.accounts.models import Role, User
-from apps.catalog.models import ProcedureKind
+from apps.catalog.models import Procedure, ProcedureKind
 from apps.catalog.services import visible_procedures
 from apps.org.models import Department
-from apps.programs.domain import course_end, fold, sex_from_name
-from apps.programs.models import Prescription, Program, ProgramSource
-from apps.programs.services import save_program
+from apps.programs.domain import course_end, patient_key, sex_from_name
+from apps.programs.models import Prescription, Program, ProgramSource, Withdrawal
+from apps.programs.services import copy_plan, find_previous_courses, save_program
 from apps.scheduling.services import replan
 
 from .matching import ProcedureRef, match_procedure
@@ -29,28 +32,87 @@ class DuplicateProgramError(Exception):
         self.programs = programs
 
 
+class PreviousCoursesFound(Exception):
+    """Пациент уже лечился в отделении (FR-IMP-13): врач выбирает, по какому плану создать."""
+
+    def __init__(self, programs: list[Program]):
+        super().__init__("У пациента есть прошлые курсы.")
+        self.programs = programs
+
+
+class Plan(StrEnum):
+    """Из чего создать программу, если у пациента есть прошлый курс (FR-PRG-10)."""
+
+    SHEET = "sheet"  # по новому листу, связать с прошлым курсом
+    PREVIOUS = "previous"  # назначения прошлого курса, шапка — из нового листа
+    OTHER = "other"  # это другой пациент — без связи
+
+
+@dataclass(frozen=True)
+class PlanLine:
+    """Строка сравнения назначений: что было в прошлом курсе и что в новом листе."""
+
+    label: str
+    old: str = ""
+    new: str = ""
+
+    @property
+    def state(self) -> str:
+        if self.old and self.new:
+            return "same" if self.old == self.new else "changed"
+        return "added" if self.new else "removed"
+
+
 def find_duplicates(department: Department, sheet: Sheet, start: date) -> list[Program]:
     """Программы отделения того же пациента, курс которых пересекается с курсом из листа
     (FR-IMP-11). Тот же пациент — совпал ИБ, либо у одной из программ ИБ нет, а ФИО
     совпадает без учёта регистра, «ё» и лишних пробелов. Разные ИБ — разные курсы."""
     end = course_end(start, department.course_length(sheet.shrm))
-    name = _name_key(sheet.full_name)
-    overlapping = Program.objects.filter(
-        department=department, start_date__lte=end, end_date__gte=start
-    ).order_by("start_date")
+    name = patient_key(sheet.full_name)
+    # Выбывший до начала нового курса — это прошлый курс, а не дубль (FR-IMP-13).
+    overlapping = (
+        Program.objects.filter(department=department, start_date__lte=end, end_date__gte=start)
+        .exclude(
+            Exists(
+                Withdrawal.objects.filter(
+                    program=OuterRef("pk"), returned_on__isnull=True, date_from__lte=start
+                )
+            )
+        )
+        .order_by("start_date")
+    )
     duplicates = []
     for program in overlapping:
         if sheet.history_number and program.history_number:
             same = program.history_number == sheet.history_number
         else:
-            same = _name_key(program.full_name) == name
+            same = patient_key(program.full_name) == name
         if same:
             duplicates.append(program)
     return duplicates
 
 
-def _name_key(full_name: str) -> str:
-    return " ".join(fold(full_name).split())
+def compare_plans(department: Department, sheet: Sheet, previous: Program) -> list[PlanLine]:
+    """Назначения прошлого курса и нового листа рядом (FR-IMP-13): по процедуре, в порядке
+    нового листа, затем то, что было только в прошлом курсе."""
+    old: dict[object, str] = {}
+    labels: dict[object, str] = {}
+    for item in previous.prescriptions.select_related("procedure").order_by("card_order", "pk"):
+        key = item.procedure_id or f"raw:{item.raw_text}"
+        old[key] = _dose(item.duration_min, item.per_day)
+        labels[key] = item.procedure.card_label if item.procedure else item.raw_text
+    lines = []
+    for row, procedure, duration in _matched_rows(department, sheet):
+        key = procedure.pk if procedure else f"raw:{row.raw_text}"
+        label = procedure.card_label if procedure else row.raw_text
+        lines.append(PlanLine(label, old.pop(key, ""), _dose(duration, row.per_day)))
+    lines += [PlanLine(labels[key], dose, "") for key, dose in old.items()]
+    return lines
+
+
+def _dose(duration_min: int | None, per_day: int) -> str:
+    """«30 мин, 1 р/д» — по этому видно, что назначение изменилось."""
+    return ", ".join(([f"{duration_min} мин"] if duration_min else []) + [f"{per_day} р/д"])
 
 
 @transaction.atomic
@@ -61,12 +123,16 @@ def import_prescription_sheet(
     *,
     attending_doctor: User,
     force: bool = False,
+    plan: Plan | None = None,
+    previous: Program | None = None,
     today: date | None = None,
 ) -> Program:
     """Создаёт программу из листа назначений и сразу заполняет назначения (FR-IMP-10).
 
     Всё, что требует внимания врача, записывается в import_warnings и показывается
-    на странице программы — отдельного экрана подтверждения нет.
+    на странице программы — отдельного экрана подтверждения нет. Исключение — похожая
+    программа (FR-IMP-11) и прошлые курсы пациента (FR-IMP-13): пока ``plan`` не выбран,
+    создание останавливается с ``PreviousCoursesFound``.
     """
     require_role(user, department, Role.DOCTOR)
     warnings = list(sheet.warnings)
@@ -82,6 +148,15 @@ def import_prescription_sheet(
         duplicates = find_duplicates(department, sheet, start)
         if duplicates:
             raise DuplicateProgramError(duplicates)
+    if plan is None:
+        courses = find_previous_courses(department, sheet.full_name, start)
+        if courses:
+            raise PreviousCoursesFound(courses)
+    elif plan != Plan.OTHER:
+        if previous is None or previous.department_id != department.pk:
+            raise ValidationError("Выберите прошлый курс пациента из этого отделения.")
+    if plan == Plan.OTHER:
+        previous = None
 
     sex = sex_from_name(sheet.full_name)
     if not sex:
@@ -98,10 +173,18 @@ def import_prescription_sheet(
         attending_doctor=attending_doctor,
         start_date=start,
         source=ProgramSource.IMPORT,
+        previous=previous,
     )
     save_program(user, program, end_date_changed=False)
 
-    warnings += _create_prescriptions(user, program, sheet)
+    if plan == Plan.PREVIOUS:
+        copy_plan(user, program, previous)
+        warnings.append(
+            f"Назначения взяты из прошлого курса ({previous.start_date:%d.%m.%Y} – "
+            f"{previous.end_date:%d.%m.%Y}), а не из листа — проверьте их."
+        )
+    else:
+        warnings += _create_prescriptions(user, program, sheet)
     program.import_warnings = warnings
     program._history_user = user
     program.save(update_fields=["import_warnings", "updated_at"])
@@ -110,11 +193,11 @@ def import_prescription_sheet(
     return program
 
 
-def _create_prescriptions(user: User, program: Program, sheet: Sheet) -> list[str]:
-    procedures = {p.pk: p for p in visible_procedures(program.department)}
+def _matched_rows(department: Department, sheet: Sheet) -> list[tuple]:
+    """Строки листа, которые станут назначениями: строка, процедура (или None), длительность."""
+    procedures = {p.pk: p for p in visible_procedures(department)}
     refs = [ProcedureRef(p.pk, p.name, p.kind, tuple(p.synonyms)) for p in procedures.values()]
-    warnings = []
-    order = 0
+    result: list[tuple] = []
     for row in sheet.rows:
         if row.consultation:
             # Консультации — только те, что есть в карте (психолог, логопед, эрготерапевт);
@@ -124,20 +207,28 @@ def _create_prescriptions(user: User, program: Program, sheet: Sheet) -> list[st
                 continue
         else:
             ref = match_procedure(row.match_text, refs)
-        procedure = procedures[ref.id] if ref else None
+        procedure: Procedure | None = procedures[ref.id] if ref else None
+        duration = row.duration_min or (procedure.default_duration_min if procedure else None)
+        result.append((row, procedure, duration))
+    return result
 
-        order += 1
+
+def _create_prescriptions(user: User, program: Program, sheet: Sheet) -> list[str]:
+    warnings = []
+    for order, (row, procedure, duration) in enumerate(
+        _matched_rows(program.department, sheet), start=1
+    ):
         prescription = Prescription(
             program=program,
             procedure=procedure,
             raw_text=row.raw_text,
-            duration_min=row.duration_min
-            or (procedure.default_duration_min if procedure else None),
+            duration_min=duration,
             per_day=row.per_day,
             start_date=row.prescribed_on
             if row.prescribed_on and row.prescribed_on > program.start_date
             else None,
             cancel_date=row.cancel_date,
+            in_card=not (procedure and procedure.evening_individual),
             card_order=order,
         )
         warnings += _fit_into_course(prescription)

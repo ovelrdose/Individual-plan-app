@@ -1,0 +1,25 @@
+{# Перенос на тренажёре перетаскиванием (FR-SCH-10a): ошибка или вопрос о причине сверх вместимости. #}
+<div id="cell-panel" class="card shadow board-panel">
+  <div class="card-header d-flex align-items-center gap-2 py-2">
+    <strong>{{ booking.equipment.name }}, {{ booking.date|date:"d.m" }}: {{ booking.program.room_label }} {{ booking.program.surname }} → {{ start|time:"G:i" }}</strong>
+    <button type="button" class="btn-close ms-auto" aria-label="Закрыть"
+            onclick="const p = this.closest('#cell-panel'); p.replaceChildren(); p.className = ''"></button>
+  </div>
+  <div class="card-body py-2">
+    {% if error %}<div class="alert alert-danger py-2 mb-0">{{ error }}</div>{% endif %}
+    {% if confirm %}
+      <div class="alert alert-warning py-2">
+        <ul class="mb-1 ps-3">{% for item in confirm %}<li>{{ item.message }}</li>{% endfor %}</ul>
+      </div>
+      <form class="d-flex gap-1" hx-post="{% url 'scheduling:board_equipment_move' booking.pk %}"
+            hx-target="#cell-panel" hx-swap="outerHTML">
+        <input type="hidden" name="start" value="{{ start|time:'H:i' }}">
+        <input type="hidden" name="version" value="{{ version }}">
+        <label for="equipment-reason" class="visually-hidden">Причина</label>
+        <input id="equipment-reason" name="reason" class="form-control form-control-sm" maxlength="100" required
+               placeholder="Причина — будет видна пометкой в шахматке">
+        <button type="submit" class="btn btn-sm btn-warning text-nowrap">Всё равно перенести</button>
+      </form>
+    {% endif %}
+  </div>
+</div>

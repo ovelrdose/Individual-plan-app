@@ -10,6 +10,8 @@
     </ol>
   </nav>
 
+  {# Всё, что меняют другие пользователи, обновляется само (NFR-11); панель занятия — снаружи. #}
+  <div id="program-live" data-live="program:{{ program.pk }}">
   <div class="d-flex align-items-center gap-2 mb-3">
     <div>
       <h1 class="h3 mb-0">{{ program.full_name }}</h1>
@@ -17,12 +19,13 @@
         Индивидуальная программа · {{ program.department.name }} · палата {{ program.room }} · ШРМ {{ program.shrm }} ·
         {{ program.start_date|date:"d.m.Y" }} – {{ program.end_date|date:"d.m.Y" }}
         ({{ program.course_dates|length }} дн.)
-        {% if program.is_finished %}<span class="badge text-bg-secondary">курс завершён</span>{% endif %}
+        {% if withdrawal %}<span class="badge text-bg-danger">{{ withdrawal }}</span>
+        {% elif program.is_finished %}<span class="badge text-bg-secondary">курс завершён</span>{% endif %}
       </div>
     </div>
     <div class="ms-auto d-flex gap-2">
       <div class="text-end">
-        <a href="{% url 'cards:download' program.pk %}" class="btn btn-success">
+        <a href="{% url 'cards:download' program.pk %}" class="btn btn-success" hx-boost="false">
           <i class="bi bi-file-earmark-excel"></i> Скачать карту
         </a>
         {% if schedule.warnings %}
@@ -30,6 +33,11 @@
           <div class="small text-warning-emphasis mt-1">В отдельные дни время другое — см. «Расписание»</div>
         {% endif %}
       </div>
+      {% if can_repeat %}
+        <a href="{% url 'programs:repeat' program.pk %}" class="btn btn-outline-primary" title="Новая программа для этого пациента">
+          <i class="bi bi-arrow-repeat"></i> Повторный курс
+        </a>
+      {% endif %}
       {% if can_edit %}
         <a href="{% url 'programs:edit' program.pk %}" class="btn btn-outline-secondary">
           <i class="bi bi-pencil"></i> Данные пациента и курса
@@ -42,6 +50,47 @@
       {% endif %}
     </div>
   </div>
+
+  {% if withdrawal %}
+    {# Выбытие (FR-PRG-9): с этой даты занятий нет, данные — только просмотр. #}
+    <div class="alert alert-danger d-flex align-items-center gap-3">
+      <div>
+        <strong>Пациент выбыл с {{ withdrawal.date_from|date:"d.m.Y" }}</strong> — {{ withdrawal.get_reason_display }}{% if withdrawal.note %}: {{ withdrawal.note }}{% endif %}.
+        <div class="small">С этой даты занятий нет, в шахматках его нет. Данные и назначения — только просмотр.</div>
+      </div>
+      {% if can_restore %}
+        <form method="post" action="{% url 'programs:restore' program.pk %}" class="ms-auto"
+              onsubmit="return confirm('Восстановить пациента? Он снова лечится с сегодняшнего дня: расписание подберётся заново.')">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-outline-dark text-nowrap"><i class="bi bi-arrow-counterclockwise"></i> Восстановить</button>
+        </form>
+      {% endif %}
+    </div>
+  {% elif can_withdraw %}
+    <details class="mb-3">
+      <summary class="text-body-secondary">Пациент выбыл раньше срока…</summary>
+      <form method="post" action="{% url 'programs:withdraw' program.pk %}" class="row g-2 align-items-end mt-1"
+            onsubmit="return confirm('Отметить выбытие? Занятия с этой даты будут убраны, пациент уйдёт из шахматок.')">
+        {% csrf_token %}
+        <div class="col-auto">
+          <label class="form-label small mb-0" for="{{ withdrawal_form.date_from.id_for_label }}">{{ withdrawal_form.date_from.label }}</label>
+          {{ withdrawal_form.date_from }}
+        </div>
+        <div class="col-auto">
+          <label class="form-label small mb-0" for="{{ withdrawal_form.reason.id_for_label }}">{{ withdrawal_form.reason.label }}</label>
+          {{ withdrawal_form.reason }}
+        </div>
+        <div class="col">
+          <label class="form-label small mb-0" for="{{ withdrawal_form.note.id_for_label }}">{{ withdrawal_form.note.label }}</label>
+          {{ withdrawal_form.note }}
+        </div>
+        <div class="col-auto">
+          <button type="submit" class="btn btn-outline-danger"><i class="bi bi-box-arrow-right"></i> Выбыл</button>
+        </div>
+        <div class="form-text">Дата — первый день без занятий. Сегодняшние занятия убираются целиком, прошедшие дни не меняются.</div>
+      </form>
+    </details>
+  {% endif %}
 
   {% if review_items %}
     <div class="alert alert-warning d-flex gap-3">
@@ -74,6 +123,17 @@
           {% endif %}
           <span class="text-body-secondary small ms-2">создана: {{ program.get_source_display }}</span>
         </dd>
+        {% if courses|length > 1 %}
+          {# Курсы пациента (FR-PRG-10): программы, связанные как повторные. #}
+          <dt class="col-2 mt-2">Курсы пациента</dt>
+          <dd class="col-10 mt-2 mb-0">
+            {% for course in courses %}
+              {% if course.pk == program.pk %}<strong>{{ course.start_date|date:"d.m.Y" }} – {{ course.end_date|date:"d.m.Y" }}</strong>
+              {% else %}<a href="{% url 'programs:detail' course.pk %}">{{ course.start_date|date:"d.m.Y" }} – {{ course.end_date|date:"d.m.Y" }}</a>{% endif %}
+              <span class="text-body-secondary small">ШРМ {{ course.shrm }}</span>{% if not forloop.last %} · {% endif %}
+            {% endfor %}
+          </dd>
+        {% endif %}
       </dl>
     </div>
   </div>
@@ -83,5 +143,6 @@
   {% include "programs/_prescriptions.html" %}
 
   <div class="mt-4">{% include "scheduling/_schedule.html" %}</div>
+  </div>
   <div id="booking-panel"></div>
 {% endblock %}

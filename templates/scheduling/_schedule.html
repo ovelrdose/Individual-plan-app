@@ -1,58 +1,24 @@
 {% load schedule %}
 {# Расписание программы: проблемы, типичный день (как в карте), календарь курса. #}
 <div id="schedule"{% if oob %} hx-swap-oob="true"{% endif %}>
-  <div class="d-flex align-items-center gap-2 mb-2">
-    <h2 class="h5 mb-0">Расписание</h2>
-    {% if can_schedule %}
-      <form method="post" action="{% url 'scheduling:program_replan' program.pk %}" class="ms-auto">
-        {% csrf_token %}
-        <button type="submit" class="btn btn-sm btn-outline-secondary"
-                title="Например, после изменения расписания групп. Закреплённые вручную занятия не меняются.">
-          <i class="bi bi-arrow-repeat"></i> Подобрать заново
-        </button>
-      </form>
-    {% endif %}
-  </div>
+  <h2 class="h5 mb-2">Расписание</h2>
   <p class="text-body-secondary small">
-    Группы ЛФК, бассейн, индивидуальные занятия и тренажёры ставятся автоматически по расписанию групп
-    и сменам инструкторов и пересчитываются при изменении назначений. Уже поставленное индивидуальное
-    занятие при пересчёте остаётся у того же инструктора и в то же время, если это ещё возможно{% if can_schedule %};
-    «Подобрать заново» распределяет индивидуальные с нуля{% endif %}. Строки — слоты сетки инструкторов;
-    пустая строка — окно, в это время пациент свободен.
+    Группы ЛФК, бассейн и тренажёры ставятся автоматически на весь курс по расписанию групп и
+    пересчитываются при изменении назначений. Индивидуальные занятия — в шахматке на день вперёд:
+    в типичном дне и в карте — время из ближайшей шахматки, правка — только в шахматке.
+    Строки — слоты сетки инструкторов; пустая строка — окно, в это время пациент свободен.
   </p>
 
-  {% if schedule.individual %}
-    {# Инструктор по желанию пациента (решение 44): выбирает специалист ФР, врач видит. #}
-    <div class="card mb-3" id="preferred-instructor">
-      <div class="card-body py-2">
-        <h3 class="h6 mb-2">Инструктор по желанию пациента</h3>
-        {% if preferred_error %}<div class="alert alert-danger py-2 mb-2">{{ preferred_error }}</div>{% endif %}
-        {% if can_schedule %}
-          <form class="d-flex gap-2 align-items-center flex-wrap" method="post"
-                action="{% url 'scheduling:program_preferred_instructor' program.pk %}"
-                hx-post="{% url 'scheduling:program_preferred_instructor' program.pk %}"
-                hx-target="#schedule" hx-swap="outerHTML">
-            {% csrf_token %}
-            <select name="instructor" class="form-select form-select-sm" style="width: auto"
-                    aria-label="Инструктор по желанию пациента">
-              <option value="">— не выбран —</option>
-              {% for item in schedule.instructors %}
-                <option value="{{ item.pk }}"{% if item.pk == schedule.preferred.pk %} selected{% endif %}>{{ item.short_name }}</option>
-              {% endfor %}
-              {% if schedule.preferred and not schedule.preferred.is_active %}
-                <option value="{{ schedule.preferred.pk }}" selected>{{ schedule.preferred.short_name }} (не работает)</option>
-              {% endif %}
-            </select>
-            <button type="submit" class="btn btn-sm btn-outline-primary">Выбрать</button>
-          </form>
-          <div class="form-text">В его рабочие дни индивидуальные — только у него, в остальные — у напарника по 2/2 или другого свободного инструктора.</div>
-        {% elif schedule.preferred %}
-          <span>{{ schedule.preferred.short_name }}</span>
-        {% else %}
-          <span class="text-body-secondary">не выбран</span>
-        {% endif %}
-      </div>
-    </div>
+  {% if schedule.boards %}
+    {# Индивидуальные из шахматок (FR-SCH-16): где пациент сегодня и завтра. #}
+    <ul class="list-unstyled mb-3">
+      {% for line in schedule.boards %}
+        <li>
+          <a href="{% url 'scheduling:board' %}?date={{ line.date|date:'Y-m-d' }}">Шахматка {{ line.date|date:"D d.m" }}</a>:
+          <span class="{% if line.hold %}text-danger fw-semibold{% endif %}">{{ line.text }}</span>
+        </li>
+      {% endfor %}
+    </ul>
   {% endif %}
 
   {% if schedule.pools %}
@@ -151,6 +117,15 @@
               <tr>
                 <td class="text-start text-nowrap">{{ row.date|date:"d.m D" }}</td>
                 {% for cell in row.cells %}{% with column=schedule.columns|index:forloop.counter0 %}
+                  {% if cell.individual %}
+                    {# Индивидуальное — из шахматки, правится только там (FR-SCH-16). #}
+                    <td class="{% if cell.hold == 'не распределён' %}table-danger{% elif not cell.active %}table-secondary{% endif %}">
+                      {% for booking in cell.bookings %}<a class="text-reset" href="{% url 'scheduling:board' %}?date={{ row.date|date:'Y-m-d' }}"
+                         title="Открыть шахматку {{ row.date|date:'d.m' }}">{{ booking.start|time:"G:i" }}{% if booking.instructor %} {{ booking.instructor.short_name }}{% endif %}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+                      {% if cell.hold %}<span class="{% if cell.hold == 'не распределён' %}text-danger{% else %}text-body-secondary{% endif %}">{{ cell.hold }}</span>
+                      {% elif cell.pending %}<span class="text-body-secondary" title="Шахматка на этот день ещё не составлялась">…</span>{% endif %}
+                    </td>
+                  {% else %}
                   <td class="{% if cell.deviation %}table-warning{% elif cell.active and not cell.bookings and not cell.removed %}table-danger{% elif not cell.active %}table-secondary{% endif %}">
                     {% for booking in cell.bookings %}
                       {% if can_schedule %}
@@ -168,17 +143,18 @@
                       {% endif %}
                     {% endif %}
                   </td>
+                  {% endif %}
                 {% endwith %}{% endfor %}
               </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-      <p class="small text-body-secondary">Жёлтым — время не как в типичном дне, красным — занятие не поставлено, серым — назначение в этот день не действует. <i class="bi bi-pin-angle"></i> — поставлено вручную, подбор его не меняет.{% if can_schedule %} Нажмите на время, чтобы изменить, убрать или открепить занятие.{% endif %}</p>
+      <p class="small text-body-secondary">Жёлтым — время не как в типичном дне, красным — занятие не поставлено, серым — назначение в этот день не действует. <i class="bi bi-pin-angle"></i> — поставлено вручную, подбор его не меняет.{% if can_schedule %} Нажмите на время группы или тренажёра, чтобы изменить, убрать или открепить занятие.{% endif %} Индивидуальные — по шахматкам: «…» — шахматка на этот день ещё не составлялась.</p>
     </details>
   {% elif not schedule.columns %}
     <p class="text-body-secondary">В назначениях нет групп ЛФК, бассейна, индивидуальных занятий и тренажёров — ставить нечего.</p>
   {% elif not schedule.conflicts %}
-    <p class="text-body-secondary">Занятия ещё не поставлены — нажмите «Подобрать заново».</p>
+    <p class="text-body-secondary">Занятия ещё не поставлены.</p>
   {% endif %}
 </div>

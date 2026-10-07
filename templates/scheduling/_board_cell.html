@@ -1,4 +1,4 @@
-{# Панель ячейки шахматки (FR-SCH-15): специалист ФР ставит, переносит и убирает пациента и блок. #}
+{# Панель ячейки шахматки (FR-SCH-10): специалист ФР ставит, переносит и убирает пациентов, ставит пометку и блок. #}
 <div id="cell-panel" class="card shadow board-panel">
   <div class="card-header d-flex align-items-center gap-2 py-2">
     <strong>{{ cell.instructor.short_name }}, {{ cell.day|date:"d.m" }}, {{ cell.slot.start|time:"G:i" }}–{{ cell.slot.end|time:"G:i" }}</strong>
@@ -10,97 +10,147 @@
     {% if confirm %}
       <div class="alert alert-warning py-2">
         <ul class="mb-1 ps-3">{% for item in confirm %}<li>{{ item.message }}</li>{% endfor %}</ul>
-        Если всё же нужно — укажите причину и сохраните ещё раз.
       </div>
     {% endif %}
 
     {% if seat is None %}
       <p class="text-body-secondary mb-0">Инструктор в этот день не работает.</p>
 
-    {% elif seat.booking %}
-      <p class="mb-2">Пациент: <strong>{{ seat.patient }}</strong>{% if seat.booking.pinned %} <i class="bi bi-pin-angle" title="Поставлено вручную"></i>{% endif %}</p>
-      {% if not editable %}
-        <p class="text-body-secondary small mb-0">Пациент другого отделения — правит специалист ФР этого отделения.</p>
-      {% else %}
-        <form class="mb-2" hx-post="{% url 'scheduling:board_move' seat.booking.pk %}"
-              hx-target="#cell-panel" hx-swap="outerHTML">
-          {% include "scheduling/_board_cell_fields.html" %}
-          <input type="hidden" name="version" value="{{ seat.booking.version }}">
-          <label for="move-target" class="form-label small mb-1">Перенести в свободную ячейку этого дня</label>
-          <select id="move-target" name="target" class="form-select form-select-sm mb-2" required>
-            <option value="">— выберите —</option>
-            {% for value, label in targets %}
-              <option value="{{ value }}"{% if posted.target == value %} selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-          </select>
-          {% if confirm %}{% include "scheduling/_board_reason.html" %}{% endif %}
-          <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-arrow-left-right"></i> Перенести</button>
-        </form>
-        <form class="mb-2" hx-post="{% url 'scheduling:board_prefer' seat.booking.pk %}" hx-target="#cell-panel" hx-swap="outerHTML"
-              hx-confirm="Сделать {{ seat.instructor.short_name }} инструктором по желанию пациента? Все его индивидуальные занятия перейдут к нему, где это возможно.">
-          {% include "scheduling/_board_cell_fields.html" %}
-          <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-person-check"></i> Закрепить за этим инструктором</button>
-        </form>
-        <form hx-post="{% url 'scheduling:board_remove' seat.booking.pk %}" hx-target="#cell-panel" hx-swap="outerHTML"
-              hx-confirm="Убрать занятие на {{ cell.day|date:'d.m' }}? Подбор его не вернёт; вернуть — поставить пациента в любую ячейку.">
-          {% include "scheduling/_board_cell_fields.html" %}
-          <input type="hidden" name="version" value="{{ seat.booking.version }}">
-          <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-x-lg"></i> Убрать занятие на эту дату</button>
-        </form>
-      {% endif %}
-
-    {% elif seat.busy %}
-      <p class="mb-2">Занято: <strong>{{ seat.busy.text }}</strong>
-        <span class="text-body-secondary small">{% if seat.busy.one_off %}(разовый блок){% else %}(постоянный распорядок){% endif %}</span></p>
-      <form hx-post="{% url 'scheduling:board_block_clear' %}" hx-target="#cell-panel" hx-swap="outerHTML">
-        {% include "scheduling/_board_cell_fields.html" %}
-        <button type="submit" class="btn btn-sm btn-outline-secondary">
-          <i class="bi bi-eraser"></i> {% if seat.busy.one_off %}Убрать блок{% else %}Снять распорядок на {{ cell.day|date:"d.m" }}{% endif %}
-        </button>
-      </form>
+    {% elif not can_edit_day %}
+      <p class="text-body-secondary mb-0">Править можно только сегодняшнюю и завтрашнюю шахматку (по будням).</p>
 
     {% else %}
-      {% if weekend %}
-        <p class="text-body-secondary small">В выходные пациентов в шахматку не ставят — индивидуальные ведут дежурные 2/2.</p>
+      {% for patient, editable in patients %}
+        <div class="border rounded p-2 mb-2"{% if editable %} data-busy="{{ patient.busy }}"{% endif %}>
+          <p class="mb-2"><strong>{{ patient.label }}</strong>
+            {% if patient.program_id %}<a href="{% url 'programs:detail' patient.program_id %}" class="small ms-1">программа</a>{% endif %}</p>
+          {% if not editable %}
+            <p class="text-body-secondary small mb-0">Пациент другого отделения — правит специалист ФР этого отделения.</p>
+          {% else %}
+            <form class="d-flex gap-1 mb-2" hx-post="{% url 'scheduling:board_move' patient.booking.pk %}"
+                  hx-target="#cell-panel" hx-swap="outerHTML">
+              {% include "scheduling/_board_cell_fields.html" %}
+              <input type="hidden" name="version" value="{{ patient.booking.version }}">
+              <label for="move-target-{{ patient.booking.pk }}" class="visually-hidden">Перенести в ячейку</label>
+              <select id="move-target-{{ patient.booking.pk }}" name="target" class="form-select form-select-sm" required>
+                <option value="">Перенести в…</option>
+                {% for value, label, slot in targets %}
+                  <option value="{{ value }}" data-from="{{ slot.start|time:'H:i' }}" data-to="{{ slot.end|time:'H:i' }}"{% if posted.target == value %} selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+              <button type="submit" class="btn btn-sm btn-primary" title="Перенести"><i class="bi bi-arrow-left-right"></i></button>
+            </form>
+            <form class="d-flex gap-1 mb-2" hx-post="{% url 'scheduling:board_note' patient.booking.pk %}"
+                  hx-target="#cell-panel" hx-swap="outerHTML">
+              {% include "scheduling/_board_cell_fields.html" %}
+              <input type="hidden" name="version" value="{{ patient.booking.version }}">
+              <label for="note-{{ patient.booking.pk }}" class="visually-hidden">Пометка</label>
+              <input id="note-{{ patient.booking.pk }}" name="note" value="{{ patient.booking.note }}" maxlength="100"
+                     placeholder="Пометка: Мото-Л, art, (шар)" class="form-control form-control-sm" list="board-notes">
+              <button type="submit" class="btn btn-sm btn-outline-secondary" title="Сохранить пометку"><i class="bi bi-tag"></i></button>
+            </form>
+            <form hx-post="{% url 'scheduling:board_remove' patient.booking.pk %}" hx-target="#cell-panel" hx-swap="outerHTML"
+                  hx-confirm="Убрать пациента из сетки? Он перейдёт в блок «Отменены» и останется там, пока лечится.">
+              {% include "scheduling/_board_cell_fields.html" %}
+              <input type="hidden" name="version" value="{{ patient.booking.version }}">
+              <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-x-lg"></i> Убрать из сетки</button>
+            </form>
+          {% endif %}
+        </div>
+      {% endfor %}
+      <datalist id="board-notes"><option value="Мото-Л"><option value="Артромот"><option value="art"><option value="(шар)"></datalist>
+      {% if seat.busy %}
+        <p class="mb-2">Занято: <strong>{{ seat.busy.text }}</strong>
+          <span class="text-body-secondary small">
+            {% if seat.busy.one_off %}— разовый блок на {{ cell.day|date:"d.m" }}
+            {% elif duty %}— постоянный распорядок {{ duty.period_text }}{% endif %}
+          </span>
+        </p>
+        <div class="d-flex flex-wrap gap-2 mb-2">
+          <form hx-post="{% url 'scheduling:board_block_clear' %}" hx-target="#cell-panel" hx-swap="outerHTML">
+            {% include "scheduling/_board_cell_fields.html" %}
+            <button type="submit" class="btn btn-sm btn-outline-secondary">
+              <i class="bi bi-eraser"></i> {% if seat.busy.one_off %}Убрать блок{% else %}Снять только на {{ cell.day|date:"d.m" }}{% endif %}
+            </button>
+          </form>
+          {% if not seat.busy.one_off and duty %}
+            <form hx-post="{% url 'scheduling:board_duty_end' %}" hx-target="#cell-panel" hx-swap="outerHTML"
+                  hx-confirm="Завершить «{{ seat.busy.text }}» с {{ cell.day|date:'d.m' }}? Последний день распорядка — накануне.">
+              {% include "scheduling/_board_cell_fields.html" %}
+              {% if partner %}<input type="hidden" name="partner" value="1">{% endif %}
+              <button type="submit" class="btn btn-sm btn-outline-danger"
+                      title="С этой даты слот свободен{% if partner %} — у обоих в паре{% endif %}">
+                <i class="bi bi-calendar-x"></i> Завершить с {{ cell.day|date:"d.m" }}
+              </button>
+            </form>
+          {% endif %}
+        </div>
       {% else %}
-        <form class="mb-3" hx-post="{% url 'scheduling:board_place' %}" hx-target="#cell-panel" hx-swap="outerHTML">
-          {% include "scheduling/_board_cell_fields.html" %}
-          <label for="place-program" class="form-label small mb-1">Поставить пациента</label>
-          {% if programs %}
-            <select id="place-program" name="program" class="form-select form-select-sm mb-1" required>
-              <option value="">— выберите —</option>
-              {% for program in programs %}
-                <option value="{{ program.pk }}"{% if posted.program == program.pk|stringformat:"d" %} selected{% endif %}>
-                  {{ program.room }}п {{ program.surname }}{% if many_departments %} · {{ program.department.name }}{% endif %}
-                </option>
+        <div class="mb-3" x-data="{ q: '' }">
+          <label for="place-search" class="form-label small mb-1">{% if patients %}Поставить ещё пациента{% else %}Поставить пациента{% endif %}</label>
+          {% if candidates %}
+            <input id="place-search" type="search" x-model="q" placeholder="Палата или фамилия"
+                   class="form-control form-control-sm mb-1" autocomplete="off" autofocus>
+            <div class="board-candidates">
+              {% regroup candidates by group as grouped %}
+              {% for item in grouped %}
+                <div class="small fw-semibold text-body-secondary mt-1">{{ item.list.0.group_label }}</div>
+                {% for candidate in item.list %}
+                  <form hx-post="{% url 'scheduling:board_place' %}" hx-target="#cell-panel" hx-swap="outerHTML"
+                        data-search="{{ candidate.search }}" x-show="!q || $el.dataset.search.includes(q.toLowerCase().replaceAll('ё', 'е'))">
+                    {% include "scheduling/_board_cell_fields.html" %}
+                    <input type="hidden" name="program" value="{{ candidate.program.pk }}">
+                    <button type="submit" class="btn btn-sm btn-light w-100 text-start py-0">
+                      {{ candidate.program.room_label }} {{ candidate.program.surname }}
+                      {% if many_departments %}<span class="text-body-secondary">· {{ candidate.program.department.name }}</span>{% endif %}
+                      {% if candidate.where %}<span class="text-body-secondary small">— сейчас {{ candidate.where }}</span>{% endif %}
+                    </button>
+                  </form>
+                {% endfor %}
               {% endfor %}
-            </select>
-            <div class="form-text mb-2">Если у пациента в этот день уже есть занятие, поставленное подбором, оно переносится сюда.</div>
-            {% if confirm %}{% include "scheduling/_board_reason.html" %}{% endif %}
-            <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-person-plus"></i> Поставить</button>
+            </div>
+            <div class="form-text">В ячейке может быть несколько пациентов — время не делится. Пациент, который уже стоит в сетке один раз, переносится сюда.</div>
           {% else %}
             <p class="text-body-secondary small mb-0">Нет пациентов с индивидуальным занятием на эту дату.</p>
           {% endif %}
-        </form>
+        </div>
       {% endif %}
 
-      <form hx-post="{% url 'scheduling:board_block' %}" hx-target="#cell-panel" hx-swap="outerHTML"
-            x-data="{ kind: '{{ posted.kind|default:block_kinds.0.0|escapejs }}' }">
-        {% include "scheduling/_board_cell_fields.html" %}
-        <label for="block-kind" class="form-label small mb-1">Поставить блок</label>
-        <select id="block-kind" name="kind" class="form-select form-select-sm mb-1" x-model="kind">
-          {% for value, label in block_kinds %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
-        </select>
-        <input type="text" name="label" maxlength="60" class="form-control form-control-sm mb-1"
-               placeholder="Чем занят инструктор" value="{{ posted.label }}" x-show="kind === 'OTHER'" x-cloak
-               aria-label="Подпись блока">
-        <div class="d-flex align-items-center gap-2 mb-2">
-          <label for="block-until" class="small text-nowrap">ежедневно по</label>
-          <input id="block-until" type="date" name="until" value="{{ posted.until }}" min="{{ cell.day|date:'Y-m-d' }}"
-                 class="form-control form-control-sm">
-        </div>
-        <button type="submit" class="btn btn-sm btn-outline-secondary"><i class="bi bi-slash-circle"></i> Поставить блок</button>
-      </form>
+      <details class="mb-2"{% if posted.form == "block" %} open{% endif %}>
+        <summary class="small fw-semibold">Разовый блок{% if seat.busy %} — вместо этого{% endif %}</summary>
+        <form class="mt-2" hx-post="{% url 'scheduling:board_block' %}" hx-target="#cell-panel" hx-swap="outerHTML">
+          {% include "scheduling/_board_cell_fields.html" %}
+          <input type="hidden" name="form" value="block">
+          {% include "scheduling/_board_kind_fields.html" with prefix="block" %}
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <label for="block-until" class="small text-nowrap">ежедневно по</label>
+            <input id="block-until" type="date" name="until" value="{% if posted.form == 'block' %}{{ posted.until }}{% endif %}"
+                   min="{{ cell.day|date:'Y-m-d' }}" class="form-control form-control-sm">
+          </div>
+          <div class="form-text mb-2">Пусто — только {{ cell.day|date:"d.m" }}. Даты, где в ячейке пациент, пропускаются.</div>
+          <button type="submit" class="btn btn-sm btn-outline-secondary"><i class="bi bi-slash-circle"></i> Поставить блок</button>
+        </form>
+      </details>
+
+      <details{% if posted.form == "duty" %} open{% endif %}>
+        <summary class="small fw-semibold">{% if duty and not seat.busy.one_off %}Изменить постоянный распорядок с {{ cell.day|date:"d.m" }}{% else %}Постоянный распорядок с {{ cell.day|date:"d.m" }}{% endif %}</summary>
+        <form class="mt-2" hx-post="{% url 'scheduling:board_duty' %}" hx-target="#cell-panel" hx-swap="outerHTML">
+          {% include "scheduling/_board_cell_fields.html" %}
+          <input type="hidden" name="form" value="duty">
+          {% include "scheduling/_board_kind_fields.html" with prefix="duty" %}
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <label for="duty-until" class="small text-nowrap">по</label>
+            <input id="duty-until" type="date" name="until" value="{% if posted.form == 'duty' %}{{ posted.until }}{% endif %}"
+                   min="{{ cell.day|date:'Y-m-d' }}" class="form-control form-control-sm">
+          </div>
+          <div class="form-text mb-2">
+            Каждый рабочий день с {{ cell.day|date:"d.m" }}; пусто «по» — бессрочно.
+            {% if duty and not seat.busy.one_off %}Прежний распорядок закончится накануне.{% endif %}
+            Пациенты этого слота уйдут в «Не распределены».
+          </div>
+          <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-calendar-check"></i> Поставить распорядок</button>
+        </form>
+      </details>
     {% endif %}
   </div>
 </div>

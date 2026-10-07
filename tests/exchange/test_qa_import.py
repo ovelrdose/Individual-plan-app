@@ -18,7 +18,11 @@ from apps.accounts.access import SESSION_DEPARTMENT_KEY
 from apps.accounts.models import Role
 from apps.cards.models import CardExport
 from apps.exchange.prescription_sheet import parse_sheet
-from apps.exchange.services import DuplicateProgramError, import_prescription_sheet
+from apps.exchange.services import (
+    DuplicateProgramError,
+    PreviousCoursesFound,
+    import_prescription_sheet,
+)
 from apps.exchange.views import PENDING_KEY
 from apps.programs.models import Program
 from tests.sheets import make_sheet
@@ -384,9 +388,9 @@ class TestDuplicates:
     def test_next_day_after_course_is_not_duplicate(self, doctor, department):
         do_import(doctor, department, make_sheet(shrm=3))  # 02.10–12.10
 
-        do_import(doctor, department, make_sheet(rows=[("13.10.26", "Имитрон", "")]))
-
-        assert Program.objects.count() == 2
+        # Не дубль, а прошлый курс (FR-IMP-13).
+        with pytest.raises(PreviousCoursesFound):
+            do_import(doctor, department, make_sheet(rows=[("13.10.26", "Имитрон", "")]))
 
     def test_new_course_ending_on_first_day_of_existing(self, doctor, department):
         do_import(doctor, department, make_sheet(rows=[("12.10.26", "Имитрон", "")]))

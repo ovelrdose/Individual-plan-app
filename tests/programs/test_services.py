@@ -244,3 +244,43 @@ def test_program_is_finished(make_program):
     assert not program.is_finished(date(2026, 10, 15))
     assert program.is_finished(date(2026, 10, 16))
     assert isinstance(program, Program)
+
+
+class TestEveningIndividual:
+    """Мото-Л без индивидуального занятия — повод проверить назначения (FR-SCH-8)."""
+
+    @pytest.fixture
+    def moto(self, db):
+        from apps.catalog.models import Procedure, ProcedureKind
+
+        return Procedure.objects.create(
+            name="Мото-Л", card_label="Мото-Л", kind=ProcedureKind.CARD_ONLY,
+            evening_individual=True,
+        )  # fmt: skip
+
+    def test_warning_without_individual(self, doctor, make_program, procedures, moto):
+        program = make_program()
+        add(doctor, program, moto)
+
+        assert any("Мото-Л" in item for item in services.review_items(program))
+
+        add(doctor, program, procedures["individual"])
+        assert services.review_items(program) == []
+
+    def test_added_without_card_row(self, doctor, make_program, moto):
+        prescription = add(doctor, make_program(), moto)
+        assert not prescription.in_card
+
+    def test_unrecognized_row_chosen_as_moto_l(self, doctor, make_program, moto):
+        program = make_program()
+        row = Prescription.objects.create(program=program, raw_text="Мотол-Л", card_order=1)
+
+        row.procedure = moto
+        services.update_prescription(doctor, row)
+        row.refresh_from_db()
+        assert not row.in_card
+
+        row.in_card = True
+        services.update_prescription(doctor, row)
+        row.refresh_from_db()
+        assert row.in_card, "дальше врач решает сам"

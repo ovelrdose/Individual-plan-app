@@ -14,6 +14,7 @@ from apps.org.models import Department
 PRIMARY_DOCS = Path(settings.BASE_DIR) / "primary_docs"
 LFK = PRIMARY_DOCS / "lfk.xlsx"
 POOL = PRIMARY_DOCS / "basseyn.xlsx"
+DS = PRIMARY_DOCS / "Gruppy_DS.xlsx"
 
 pytestmark = [
     pytest.mark.django_db,
@@ -78,7 +79,9 @@ def test_equipment_and_other_procedures(loaded):
 
     individual = Procedure.objects.get(kind=ProcedureKind.INDIVIDUAL)
     assert (individual.card_label, individual.default_duration_min) == ("Инд.занятие", 30)
-    assert Procedure.objects.filter(kind=ProcedureKind.CARD_ONLY).count() == 9
+    assert Procedure.objects.filter(kind=ProcedureKind.CARD_ONLY).count() == 11
+    evening = Procedure.objects.filter(evening_individual=True)
+    assert set(evening.values_list("name", flat=True)) == {"Мото-Л", "Артромот"}
 
     for item in Procedure.objects.all():
         item.full_clean()
@@ -111,12 +114,58 @@ def test_unknown_group(tmp_path):
 def test_command(capsys):
     call_command("load_initial_catalog")
 
-    assert "занятия групп: создано 18" in capsys.readouterr().out
+    # 10 ЛФК + 8 бассейна + 11 дневного стационара.
+    assert "занятия групп: создано 29" in capsys.readouterr().out
 
 
 def test_command_reports_errors(tmp_path):
     with pytest.raises(CommandError):
         call_command("load_initial_catalog", lfk=tmp_path / "missing.xlsx")
+
+
+class TestDayHospital:
+    """Группы дневного стационара из Gruppy_DS.xlsx (FR-CAT-6)."""
+
+    def test_groups_sessions_and_places(self, tmp_path):
+        ds = make_xlsx(
+            tmp_path / "ds.xlsx",
+            [
+                (time(8, 15), "острая спина", "181 кабинет"),
+                (time(9, 0), " спина", "181 кабинет"),
+                (time(15, 0), "коленный сустав", "179кабинет"),
+                (time(15, 45), "спина", "181 кабинет"),
+                (time(17, 15), "ГСС", None),
+            ],
+        )
+
+        load_initial_catalog(LFK, POOL, ds)
+
+        groups = Procedure.objects.filter(kind=ProcedureKind.DS_GROUP)
+        assert set(groups.values_list("name", flat=True)) == {
+            "ДС: острая спина", "ДС: спина", "ДС: плечо", "ДС: коленный сустав",
+            "ДС: ШОП", "ДС: ТБС", "ДС: ГСС",
+        }  # fmt: skip
+        assert all(group.department is None for group in groups), "общие для центра"
+        assert starts("ДС: спина") == [time(9, 0), time(15, 45)]
+        knee = GroupSession.objects.get(procedure__name="ДС: коленный сустав")
+        assert (knee.duration_min, knee.effective_place) == (30, "179 кабинет")
+        assert GroupSession.objects.get(procedure__name="ДС: ГСС").effective_place == ""
+
+    def test_without_file_no_groups(self, loaded):
+        assert not Procedure.objects.filter(kind=ProcedureKind.DS_GROUP).exists()
+
+    @pytest.mark.skipif(not DS.exists(), reason="нет файла заказчика")
+    def test_customer_file(self):
+        report = load_initial_catalog(LFK, POOL, DS)
+
+        assert report.created["занятия групп"] == 29
+        assert starts("ДС: острая спина") == [time(8, 15), time(16, 30)]
+
+    def test_unknown_group(self, tmp_path):
+        ds = make_xlsx(tmp_path / "ds.xlsx", [(time(9, 0), "локоть", "179 кабинет")])
+
+        with pytest.raises(UnknownGroupError, match="«локоть»"):
+            load_initial_catalog(LFK, POOL, ds)
 
 
 class TestReadSchedule:
@@ -131,6 +180,11 @@ class TestReadSchedule:
             (time(9, 10), "Эрго - общая", "A1"),
             (time(12, 0), "Йога", "A3"),
         ]
+
+    def test_place_column(self, tmp_path):
+        path = make_xlsx(tmp_path / "s.xlsx", [(time(9, 0), "спина", " 179кабинет ")])
+
+        assert read_schedule(path)[0].place == "179 кабинет"
 
     def test_missing_name(self, tmp_path):
         path = make_xlsx(tmp_path / "s.xlsx", [(time(9, 10), None)])

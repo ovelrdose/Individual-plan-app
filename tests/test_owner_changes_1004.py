@@ -93,20 +93,6 @@ class TestDepartmentStaffSeePrograms:
         assert program.department.name in detail.content.decode()
         assert client.get(reverse("cards:download", args=[program.pk])).status_code == 200
 
-    def test_schedule_is_rehab_only(self, client, doctor, rehab, make_program):
-        program = make_program()
-        url = reverse("scheduling:program_replan", args=[program.pk])
-
-        client.force_login(doctor)
-        assert client.post(url).status_code == 403
-        assert (
-            "Подобрать заново"
-            not in client.get(reverse("programs:detail", args=[program.pk])).content.decode()
-        )
-
-        client.force_login(rehab)
-        assert client.post(url).status_code == 302
-
 
 class TestDeleteProgram:
     def test_only_admin(self, client, doctor, rehab, make_program):

@@ -1,7 +1,7 @@
-{# Правка занятия на странице программы (FR-SCH-9/10): специалист ФР. #}
+{# Правка группы, бассейна или тренажёра на странице программы (FR-SCH-9): специалист ФР. #}
 <div id="booking-panel" class="card shadow board-panel">
   <div class="card-header d-flex align-items-center gap-2 py-2">
-    <strong>{{ booking.procedure.card_label|default:booking.procedure.name }}, {{ booking.date|date:"d.m" }}, {{ booking.start|time:"G:i" }}{% if booking.instructor %} {{ booking.instructor.short_name }}{% endif %}</strong>
+    <strong>{{ booking.procedure.card_label|default:booking.procedure.name }}, {{ booking.date|date:"d.m" }}, {{ booking.start|time:"G:i" }}</strong>
     {% if booking.pinned %}<i class="bi bi-pin-angle" title="Поставлено вручную"></i>{% endif %}
     <button type="button" class="btn-close ms-auto" aria-label="Закрыть"
             onclick="const p = this.closest('#booking-panel'); p.replaceChildren(); p.className = ''"></button>
@@ -19,7 +19,7 @@
       <form class="mb-3" hx-post="{% url 'scheduling:booking_edit' booking.pk %}" hx-target="#booking-panel" hx-swap="outerHTML">
         <input type="hidden" name="version" value="{{ booking.version }}">
         <label for="booking-target" class="form-label small mb-1">
-          {% if field == "target" %}{% if weekend %}Время (в выходной — без инструктора){% else %}Время и инструктор{% endif %}{% elif field == "session" %}Время группы{% else %}Время на тренажёре{% endif %}
+          {% if field == "session" %}Время группы{% else %}Время на тренажёре{% endif %}
         </label>
         <select id="booking-target" name="{{ field }}" class="form-select form-select-sm mb-2">
           {% for value, label in options %}

@@ -25,14 +25,13 @@
         {% endif %}
         {% if can_manage_staff %}
           <li class="nav-item dropdown">
-            <a class="nav-link dropdown-toggle {% if request.resolver_match.app_name == 'staff' %}active fw-semibold{% endif %}" href="#"
-               role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <button type="button" class="nav-link dropdown-toggle {% if request.resolver_match.app_name == 'staff' %}active fw-semibold{% endif %}"
+                    data-bs-toggle="dropdown" aria-expanded="false">
               <i class="bi bi-people"></i> Инструкторы
-            </a>
+            </button>
             <ul class="dropdown-menu">
               <li><a class="dropdown-item" href="{% url 'staff:shifts' %}"><i class="bi bi-calendar3"></i> Смены</a></li>
               <li><a class="dropdown-item" href="{% url 'staff:duties' %}"><i class="bi bi-list-check"></i> Распорядок</a></li>
-              <li><a class="dropdown-item" href="{% url 'scheduling:changes' %}"><i class="bi bi-arrow-left-right"></i> Перестройки</a></li>
               <li><a class="dropdown-item" href="{% url 'scheduling:load' %}"><i class="bi bi-bar-chart"></i> Загрузка инструкторов</a></li>
             </ul>
           </li>
@@ -72,7 +71,7 @@
         </button>
         <ul class="dropdown-menu dropdown-menu-end">
           {% if user.is_staff %}
-            <li><a class="dropdown-item" href="{% url 'admin:index' %}"><i class="bi bi-gear"></i> {% if user_is_admin %}Администрирование{% else %}Справочники{% endif %}</a></li>
+            <li><a class="dropdown-item" hx-boost="false" href="{% url 'admin:index' %}"><i class="bi bi-gear"></i> {% if user_is_admin %}Администрирование{% else %}Справочники{% endif %}</a></li>
           {% endif %}
           <li><a class="dropdown-item" href="{% url 'password_change' %}"><i class="bi bi-key"></i> Сменить пароль</a></li>
           <li><hr class="dropdown-divider"></li>

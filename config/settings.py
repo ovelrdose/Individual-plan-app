@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "apps.scheduling",
     "apps.exchange",
     "apps.cards",
+    "apps.live",
 ]
 
 MIDDLEWARE = [
@@ -49,6 +50,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "simple_history.middleware.HistoryRequestMiddleware",
+    "apps.live.middleware.LiveOriginMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -66,6 +68,8 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
                 "apps.accounts.context_processors.department",
             ],
+            # apps.common — не приложение Django, его теги подключаются здесь.
+            "libraries": {"assets": "apps.common.templatetags.assets"},
         },
     },
 ]

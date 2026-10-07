@@ -27,9 +27,12 @@ class UnknownGroupError(ValueError):
 
 
 @transaction.atomic
-def load_initial_catalog(lfk_path: Path, pool_path: Path) -> LoadReport:
+def load_initial_catalog(
+    lfk_path: Path, pool_path: Path, ds_path: Path | None = None
+) -> LoadReport:
     """Заполняет справочники (FR-CAT-6). Идемпотентна: недостающее создаёт,
-    существующее не трогает — правки, сделанные в админке, не затираются."""
+    существующее не трогает — правки, сделанные в админке, не затираются.
+    ``ds_path`` — расписание групп дневного стационара; без него группы ДС не загружаются."""
     report = LoadReport()
 
     _, created = Department.objects.get_or_create(
@@ -39,6 +42,8 @@ def load_initial_catalog(lfk_path: Path, pool_path: Path) -> LoadReport:
 
     _load_groups(lfk_path, data.LFK_GROUPS, report)
     _load_groups(pool_path, data.POOL_GROUPS, report)
+    if ds_path is not None:
+        _load_groups(ds_path, data.DS_GROUPS, report)
     _get_or_create_procedure(data.POOL_UNSPECIFIED, report)
     _get_or_create_procedure(data.INDIVIDUAL, report)
     for spec in data.CARD_ONLY:
@@ -84,7 +89,11 @@ def _load_groups(path: Path, specs: tuple[data.ProcedureSpec, ...], report: Load
         _, created = GroupSession.objects.get_or_create(
             procedure=procedure,
             start_time=row.start,
-            defaults={"duration_min": spec.duration_min or 30},
+            defaults={
+                "duration_min": spec.duration_min or 30,
+                # Место группы — в справочнике, у занятия — только если отличается.
+                "place": row.place if row.place != procedure.place else "",
+            },
         )
         report.count("занятия групп", created)
 
@@ -107,6 +116,7 @@ def _get_or_create_procedure(
             "synonyms": list(spec.synonyms),
             "equipment": equipment,
             "group_choice": spec.group_choice,
+            "evening_individual": spec.evening_individual,
         },
     )
     report.count("процедуры", created)

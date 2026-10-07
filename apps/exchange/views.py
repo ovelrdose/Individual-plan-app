@@ -8,11 +8,18 @@ from django.views.decorators.http import require_POST
 
 from apps.accounts.access import current_department, get_department_or_404, select_department
 from apps.accounts.models import User
+from apps.programs.models import Program
 from apps.programs.services import ProgramsError
 
 from .forms import SheetUploadForm, import_departments
 from .prescription_sheet import Sheet, SheetError, parse_sheet
-from .services import DuplicateProgramError, import_prescription_sheet
+from .services import (
+    DuplicateProgramError,
+    Plan,
+    PreviousCoursesFound,
+    compare_plans,
+    import_prescription_sheet,
+)
 
 # Разобранный лист ждёт решения врача «всё равно создать» в сессии, а не на диске:
 # исходный файл не хранится (FR-IMP-12). Каждая загрузка — под своим ключом, чтобы
@@ -47,7 +54,8 @@ def sheet_import(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def sheet_import_force(request: HttpRequest) -> HttpResponse:
-    """«Всё равно создать новую» после предупреждения о похожей программе (FR-IMP-11)."""
+    """Продолжить загрузку после вопроса: «Всё равно создать новую» при похожей программе
+    (FR-IMP-11) или выбор плана при прошлом курсе (FR-IMP-13, ``plan``)."""
     pending_all = request.session.get(PENDING_KEY, {})
     pending = pending_all.pop(request.POST.get("token", ""), None)
     request.session[PENDING_KEY] = pending_all
@@ -55,39 +63,85 @@ def sheet_import_force(request: HttpRequest) -> HttpResponse:
         department = get_department_or_404(request.user, pending["department"])
         doctor = User.objects.get(pk=pending["doctor"])
         sheet = Sheet.from_dict(pending["sheet"])
+        # Без выбора плана — это кнопка «Всё равно создать новую» на экране похожей программы.
+        force = bool(pending.get("force")) or "plan" not in request.POST
     # Нет записи, её формат устарел после обновления системы, врача удалили, доступ к отделению
     # пропал — для пользователя всё это одно и то же.
     except (TypeError, KeyError, ValueError, User.DoesNotExist, Http404):
         messages.error(request, "Загрузка устарела — выберите файл ещё раз.")
         return redirect("exchange:sheet_import")
-    return _create(request, department, sheet, doctor, force=True)
+    plan = previous = None
+    if "plan" in request.POST:
+        try:
+            plan = Plan(request.POST["plan"])
+        except ValueError:
+            raise Http404("Неизвестный вариант.") from None
+        if plan != Plan.OTHER:
+            previous = (
+                Program.objects.filter(
+                    department=department, pk=request.POST.get("previous")
+                ).first()
+                if (request.POST.get("previous") or "").isdigit()
+                else None
+            )
+    return _create(request, department, sheet, doctor, force=force, plan=plan, previous=previous)
 
 
-def _create(request, department, sheet: Sheet, doctor: User, *, force: bool) -> HttpResponse:
+def _create(
+    request,
+    department,
+    sheet: Sheet,
+    doctor: User,
+    *,
+    force: bool,
+    plan: Plan | None = None,
+    previous: Program | None = None,
+) -> HttpResponse:
     try:
         program = import_prescription_sheet(
-            request.user, department, sheet, attending_doctor=doctor, force=force
+            request.user,
+            department,
+            sheet,
+            attending_doctor=doctor,
+            force=force,
+            plan=plan,
+            previous=previous,
         )
     except (ProgramsError, ValidationError) as error:
         text = "; ".join(error.messages) if isinstance(error, ValidationError) else str(error)
         messages.error(request, f"Программа не создана: {text}")
         return redirect("exchange:sheet_import")
     except DuplicateProgramError as error:
-        token = secrets.token_urlsafe(16)
-        pending_all = request.session.get(PENDING_KEY, {})
-        pending_all[token] = {
-            "department": department.pk,
-            "doctor": doctor.pk,
-            "sheet": sheet.to_dict(),
-        }
-        # Держим только последние загрузки — сессия не должна расти бесконечно.
-        request.session[PENDING_KEY] = dict(list(pending_all.items())[-MAX_PENDING:])
+        token = _keep(request, department, doctor, sheet, force=False)
         return render(
             request,
             "exchange/sheet_duplicate.html",
             {"sheet": sheet, "duplicates": error.programs, "token": token},
         )
+    except PreviousCoursesFound as error:
+        token = _keep(request, department, doctor, sheet, force=force)
+        courses = [(course, compare_plans(department, sheet, course)) for course in error.programs]
+        return render(
+            request,
+            "exchange/sheet_previous.html",
+            {"sheet": sheet, "courses": courses, "token": token},
+        )
     # Список программ в шапке — того отделения, куда легла новая программа.
     select_department(request, department.pk)
     messages.success(request, f"Программа создана из листа назначений ({department.name}).")
     return redirect("programs:detail", pk=program.pk)
+
+
+def _keep(request, department, doctor: User, sheet: Sheet, *, force: bool) -> str:
+    """Разобранный лист ждёт решения врача в сессии под своим ключом."""
+    token = secrets.token_urlsafe(16)
+    pending_all = request.session.get(PENDING_KEY, {})
+    pending_all[token] = {
+        "department": department.pk,
+        "doctor": doctor.pk,
+        "sheet": sheet.to_dict(),
+        "force": force,
+    }
+    # Держим только последние загрузки — сессия не должна расти бесконечно.
+    request.session[PENDING_KEY] = dict(list(pending_all.items())[-MAX_PENDING:])
+    return token

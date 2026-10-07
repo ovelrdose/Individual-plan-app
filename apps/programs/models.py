@@ -4,13 +4,23 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from django.db.models import F, Q
+from django.db.models import Exists, F, OuterRef, Q
+from django.utils.functional import cached_property
 from simple_history.models import HistoricalRecords
 
 from apps.catalog.models import Procedure, ProcedureKind
 from apps.org.models import SHRM_VALUES, Department
 
-from .domain import course_dates, course_end, surname
+from .domain import (
+    Gap,
+    course_dates,
+    course_end,
+    is_absent,
+    is_therapy_day,
+    room_label,
+    surname,
+    therapy_dates,
+)
 
 
 class Sex(models.TextChoices):
@@ -26,7 +36,8 @@ class ProgramSource(models.TextChoices):
 class Program(models.Model):
     """Индивидуальная программа медицинской реабилитации на один курс (TZ.md, FR-PRG-1).
 
-    Это не история болезни: выписки и статусов нет, программа завершается по дате окончания.
+    Это не история болезни: выписки нет, программа завершается по дате окончания или
+    выбытием пациента (``Withdrawal``, FR-PRG-9).
     """
 
     department = models.ForeignKey(
@@ -70,21 +81,20 @@ class Program(models.Model):
         "создана", max_length=10, choices=ProgramSource.choices, default=ProgramSource.MANUAL
     )
     import_warnings = models.JSONField("проверить после импорта", default=list, blank=True)
-    # Задаёт специалист ФР: в рабочие дни инструктора индивидуальные — только у него
-    # (TZ.md, FR-PRG-1, решение 44).
-    preferred_instructor = models.ForeignKey(
-        "staff.Instructor",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="preferred_by",
-        verbose_name="инструктор по желанию пациента",
-    )
     schedule_issues = models.JSONField(
         "проблемы расписания",
         default=list,
         blank=True,
         help_text="Конфликты и предупреждения последнего подбора: [{code, message, conflict}].",
+    )
+    # Прошлый курс того же пациента (FR-PRG-10): карточки пациента нет, курсы связаны цепочкой.
+    previous = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="next_courses",
+        verbose_name="прошлый курс",
     )
     created_at = models.DateTimeField("создана", auto_now_add=True)
     updated_at = models.DateTimeField("изменена", auto_now=True)
@@ -111,11 +121,39 @@ class Program(models.Model):
     def surname(self) -> str:
         return surname(self.full_name)
 
+    @property
+    def room_label(self) -> str:
+        """«9п», «5а» — как палата пишется в шахматке."""
+        return room_label(self.room)
+
     def planned_end_date(self) -> date:
         return course_end(self.start_date, self.department.course_length(self.shrm))
 
     def course_dates(self) -> list[date]:
         return course_dates(self.start_date, self.end_date)
+
+    @cached_property
+    def gaps(self) -> list[Gap]:
+        """Периоды выбытия (FR-PRG-9). Кэшируются на экземпляре: сервисы, которые их меняют,
+        работают с заново прочитанной программой."""
+        # .all() — чтобы работал prefetch_related("withdrawals") в списках.
+        return [(item.date_from, item.returned_on) for item in self.withdrawals.all()]
+
+    def therapy_dates(self) -> list[date]:
+        """Дни занятий — курс без дня поступления и дня выписки (TZ.md, FR-SCH-1) и без дней
+        после выбытия (FR-PRG-9)."""
+        return therapy_dates(self.start_date, self.end_date, self.gaps)
+
+    def is_therapy_day(self, day: date) -> bool:
+        return is_therapy_day(self.start_date, self.end_date, day, self.gaps)
+
+    def is_absent(self, day: date) -> bool:
+        return is_absent(self.gaps, day)
+
+    @cached_property
+    def withdrawal(self) -> "Withdrawal | None":
+        """Текущее выбытие: пациент выбыл и не восстановлен."""
+        return next((item for item in self.withdrawals.all() if item.returned_on is None), None)
 
     @property
     def has_schedule_conflicts(self) -> bool:
@@ -123,6 +161,58 @@ class Program(models.Model):
 
     def is_finished(self, today: date | None = None) -> bool:
         return self.end_date < (today or date.today())
+
+
+def withdrawn_on(day: date) -> Exists:
+    """Условие для запросов: пациент выбыл и в этот день не лечится (FR-PRG-9)."""
+    return Exists(
+        Withdrawal.objects.filter(program=OuterRef("pk"), date_from__lte=day).filter(
+            Q(returned_on__isnull=True) | Q(returned_on__gt=day)
+        )
+    )
+
+
+class WithdrawalReason(models.TextChoices):
+    EARLY_DISCHARGE = "early_discharge", "досрочная выписка"
+    REFUSAL = "refusal", "отказ"
+    TRANSFER = "transfer", "перевод"
+    LEFT = "left", "самовольный уход"
+    OTHER = "other", "другое"
+
+
+class Withdrawal(models.Model):
+    """Выбытие пациента раньше срока (TZ.md, FR-PRG-9, решение 62).
+
+    С ``date_from`` у пациента нет занятий. Восстановление ставит ``returned_on`` — первый
+    день, когда он снова лечится: дни отсутствия остаются пустыми, расписание их не заполняет.
+    """
+
+    program = models.ForeignKey(
+        Program, on_delete=models.CASCADE, related_name="withdrawals", verbose_name="программа"
+    )
+    date_from = models.DateField("выбыл с", help_text="Первый день без занятий.")
+    reason = models.CharField("причина", max_length=20, choices=WithdrawalReason.choices)
+    note = models.CharField("комментарий", max_length=200, blank=True)
+    returned_on = models.DateField("восстановлен с", null=True, blank=True)
+    created_at = models.DateTimeField("отмечено", auto_now_add=True)
+
+    history = HistoricalRecords()
+
+    class Meta:
+        verbose_name = "выбытие"
+        verbose_name_plural = "выбытия"
+        ordering = ["date_from"]
+        constraints = [
+            # Выбыть второй раз можно только после восстановления.
+            models.UniqueConstraint(
+                fields=["program"],
+                condition=Q(returned_on__isnull=True),
+                name="withdrawal_one_open_per_program",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"Выбыл {self.date_from:%d.%m} ({self.get_reason_display()})"
 
 
 class Prescription(models.Model):

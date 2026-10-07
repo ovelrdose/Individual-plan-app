@@ -44,3 +44,8 @@ class CardData:
     course_dates: tuple[date, ...]
     schedule: tuple[ScheduleItem, ...]
     procedures: tuple[CardProcedure, ...]
+    # Дни без занятий (поступление и выписка, TZ.md, FR-SCH-1; после выбытия, FR-PRG-9) —
+    # заштрихованы во всех строках.
+    rest_dates: frozenset[date] = frozenset()
+    # Пациент выбыл — «выбыл ДД.ММ» в строке пола и возраста (FR-PRG-9).
+    withdrawn_on: date | None = None

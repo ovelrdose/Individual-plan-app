@@ -11,6 +11,7 @@ def catalog() -> list[ProcedureRef]:
     specs = [
         *data.LFK_GROUPS,
         *data.POOL_GROUPS,
+        *data.DS_GROUPS,
         data.POOL_UNSPECIFIED,
         data.INDIVIDUAL,
         *data.CARD_ONLY,
@@ -69,6 +70,49 @@ def test_reference_examples(text, expected):
 )
 def test_consultations_match_card_only(text, expected):
     found = match_procedure(text, REFS, kinds=(ProcedureKind.CARD_ONLY,))
+
+    assert (found.name if found else None) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("спина", "ДС: спина"),
+        ("Острая спина", "ДС: острая спина"),
+        ("ЛФК ШОП 30 мин 1 р/д", "ДС: ШОП"),
+        ("шейный отдел позвоночника", "ДС: ШОП"),
+        ("Колено", "ДС: коленный сустав"),
+        ("Группа: коленные суставы", "ДС: коленный сустав"),
+        ("ТБС", "ДС: ТБС"),
+        ("тазобедренного сустава", "ДС: ТБС"),
+        ("ГСС", "ДС: ГСС"),
+        ("Плечевой сустав", "ДС: плечо"),
+        ("плечо 30 мин", "ДС: плечо"),
+    ],
+)
+def test_day_hospital_groups(text, expected):
+    """Группы ДС — по названию и сокращению в любом списке (FR-IMP-14)."""
+    found = match_procedure(text, REFS)
+
+    assert (found.name if found else None) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Массаж плечевого сустава", "Массаж"),
+        ("Массаж спины", "Массаж"),
+        ("Артромот коленного сустава", "Артромот"),
+        ("Мото-Л на коленный сустав", "Мото-Л"),
+        ("Механотерапия голеностопного сустава", "Механотерапия"),
+        ("Алмаг на тазобедренный сустав 20 мин", "Алмаг"),
+        ("Индивидуальное занятие ЛФК (плечо) 30 мин", "Индивидуальное занятие"),
+        ("Бассейн спина", "ЛФК в воде: спина"),
+    ],
+)
+def test_body_part_only_qualifies_other_procedure(text, expected):
+    """Часть тела в строке другой процедуры — не группа ДС: её ищем последней."""
+    found = match_procedure(text, REFS)
 
     assert (found.name if found else None) == expected
 

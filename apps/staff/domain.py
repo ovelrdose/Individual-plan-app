@@ -76,6 +76,23 @@ def periods_overlap(a_from: date, a_to: date | None, b_from: date, b_to: date | 
     return (a_to is None or b_from <= a_to) and (b_to is None or a_from <= b_to)
 
 
+# Часы смены (TZ.md, FR-STF-2): 2/2 работают 12 часов, остальные — дневная смена.
+SHIFT_START = time(8, 0)
+SHIFT_END = {Pattern.TWO_TWO: time(20, 0)}
+DAY_SHIFT_END = time(17, 0)
+
+
+def shift_hours(pattern: Pattern | str) -> tuple[time, time]:
+    """Начало и конец смены: 2/2 — 8:00–20:00, 5/2 и «каждый день» — 8:00–17:00."""
+    return SHIFT_START, SHIFT_END.get(Pattern(pattern), DAY_SHIFT_END)
+
+
+def slot_in_shift(pattern: Pattern | str, start: time, end: time) -> bool:
+    """Слот целиком внутри смены — только в такие слоты ставится распорядок."""
+    shift_start, shift_end = shift_hours(pattern)
+    return shift_start <= start and end <= shift_end
+
+
 def pattern_works(pattern: Pattern | str, anchor_date: date, day: date) -> bool:
     """Рабочий ли день по шаблону без учёта периода и исключений (FR-STF-2).
 
@@ -288,6 +305,14 @@ class InstructorCalendar:
     def pattern_on(self, day: date) -> ShiftRule | None:
         """Шаблон, действующий в дату, или None."""
         return next((rule for rule in self.patterns if rule.covers(day)), None)
+
+    def plan_on(self, day: date) -> dict[int, Busy]:
+        """Распорядок с разовыми блоками в дату — как если бы инструктор работал.
+
+        Для экрана «Распорядок»: распорядок задают и на дни, когда инструктор не на смене.
+        """
+        self._check(day)
+        return busy_slots(self.duties, self.blocks, day, True, self.slots)
 
     def day(self, day: date) -> InstructorDay:
         working = self.is_working(day)

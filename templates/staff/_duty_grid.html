@@ -1,0 +1,79 @@
+{# Распорядок инструкторов на дату (TZ.md, FR-STF-5). Клик по ячейке — «кисть» из #duty-brush. #}
+<div id="duty-grid">
+  <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+    <a class="btn btn-sm btn-outline-secondary" href="?day={{ previous_day|date:'Y-m-d' }}" title="Предыдущий день"
+       hx-get="{% url 'staff:duties' %}?day={{ previous_day|date:'Y-m-d' }}" hx-select="#duty-grid"
+       hx-target="#duty-grid" hx-swap="outerHTML" hx-push-url="true"><i class="bi bi-chevron-left"></i></a>
+    <input type="date" name="day" value="{{ day|date:'Y-m-d' }}" class="form-control form-control-sm w-auto" aria-label="Дата"
+           hx-get="{% url 'staff:duties' %}" hx-trigger="change" hx-select="#duty-grid"
+           hx-target="#duty-grid" hx-swap="outerHTML" hx-push-url="true">
+    <a class="btn btn-sm btn-outline-secondary" href="?day={{ next_day|date:'Y-m-d' }}" title="Следующий день"
+       hx-get="{% url 'staff:duties' %}?day={{ next_day|date:'Y-m-d' }}" hx-select="#duty-grid"
+       hx-target="#duty-grid" hx-swap="outerHTML" hx-push-url="true"><i class="bi bi-chevron-right"></i></a>
+    <span class="fw-semibold px-1">{{ day|date:"l, j E" }}</span>
+    {% if day != today %}
+      <a class="btn btn-sm btn-link" href="?day={{ today|date:'Y-m-d' }}"
+         hx-get="{% url 'staff:duties' %}?day={{ today|date:'Y-m-d' }}" hx-select="#duty-grid"
+         hx-target="#duty-grid" hx-swap="outerHTML" hx-push-url="true">Сегодня</a>
+    {% endif %}
+    <span class="ms-3 small text-body-secondary">
+      <span class="duty-cell duty-legend duty-method_work d-inline-block">&nbsp;</span> постоянно
+      <span class="duty-cell duty-legend duty-method_work duty-once d-inline-block ms-2">&nbsp;</span> только на эту дату
+      <span class="duty-cell duty-legend duty-cleared d-inline-block ms-2">снято</span> распорядок снят на дату
+      <span class="duty-cell duty-legend duty-off-legend d-inline-block ms-2">&nbsp;</span> вне смены
+    </span>
+  </div>
+
+  {% if error %}<div class="alert alert-danger py-2" role="alert">{{ error }}</div>{% endif %}
+  {% if message %}<div class="alert alert-success py-2" role="status">{{ message }}</div>{% endif %}
+
+  <div class="table-responsive">
+    <table class="table table-sm table-bordered align-middle duty-table">
+      <thead class="table-light">
+        <tr>
+          <th>Инструктор</th>
+          <th>Смена</th>
+          {% for slot in slots %}
+            <th class="text-center {% if slot.is_evening %}table-secondary{% endif %}">
+              {{ slot.start|time:"G:i" }}<br><span class="fw-normal small">{{ slot.end|time:"G:i" }}</span>
+            </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <th class="text-nowrap {% if row.instructor.partner_id %}text-primary{% endif %}"
+                {% if row.instructor.partner_id %}title="Пара 2/2: {{ row.instructor.team_label }}"{% endif %}>
+              {{ row.instructor.short_name }}
+              {% if not row.working %}<span class="badge text-bg-light fw-normal" title="В эту дату не на смене">вых.</span>{% endif %}
+            </th>
+            <td class="text-nowrap small">
+              {% if row.pattern %}
+                {{ row.pattern_text }}
+                <span class="text-body-secondary">{{ row.hours.0|time:"G" }}–{{ row.hours.1|time:"G" }}</span>
+              {% else %}
+                <a class="text-danger" href="{% url 'staff:shifts' %}">смена не задана</a>
+              {% endif %}
+            </td>
+            {% for cell in row.cells %}
+              <td class="p-0 {% if not cell.in_shift %}duty-off{% endif %}">
+                {% if cell.in_shift or cell.busy %}
+                  <button type="button"
+                          class="duty-cell {% if cell.busy %}duty-{{ cell.busy.kind|lower }}{% endif %} {% if cell.busy.one_off %}duty-once{% endif %} {% if cell.cleared %}duty-cleared{% endif %}"
+                          title="{{ row.instructor.short_name }}, {{ cell.slot.start|time:'G:i' }}–{{ cell.slot.end|time:'G:i' }}: {% if cell.busy %}{{ cell.busy.text }}{% if cell.busy.one_off %} (только {{ day|date:'d.m' }}){% endif %}{% elif cell.cleared %}распорядок снят на {{ day|date:'d.m' }}{% else %}свободно для пациентов{% endif %}{% if not cell.in_shift %} — вне смены{% endif %}"
+                          hx-post="{% url 'staff:duty_paint' %}" hx-include="#duty-brush"
+                          hx-vals='{"instructor": "{{ row.instructor.pk }}", "slot": "{{ cell.slot.pk }}", "day": "{{ day|date:"Y-m-d" }}"}'
+                          hx-disabled-elt="this" hx-sync="closest table:drop"
+                          hx-target="#duty-grid" hx-swap="outerHTML">{% if cell.busy %}{{ cell.busy.text }}{% elif cell.cleared %}снято{% endif %}</button>
+                {% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+        {% empty %}
+          <tr><td colspan="{{ slots|length|add:2 }}" class="text-body-secondary">Действующих инструкторов нет — они заводятся в справочниках.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

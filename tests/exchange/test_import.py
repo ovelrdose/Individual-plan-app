@@ -7,7 +7,12 @@ from django.urls import reverse
 
 from apps.accounts.models import Role
 from apps.exchange.prescription_sheet import parse_sheet
-from apps.exchange.services import DuplicateProgramError, import_prescription_sheet
+from apps.exchange.services import (
+    DuplicateProgramError,
+    Plan,
+    PreviousCoursesFound,
+    import_prescription_sheet,
+)
 from apps.exchange.views import PENDING_KEY
 from apps.programs.models import Program, ProgramSource
 from tests.sheets import make_sheet
@@ -162,7 +167,16 @@ class TestImportService:
     def test_not_duplicate_when_courses_do_not_overlap(self, doctor, department):
         do_import(doctor, department, rows=[("02.10.26", "Имитрон", "")])
 
-        do_import(doctor, department, rows=[("01.12.26", "Имитрон", "")])
+        # Не дубль, а прошлый курс (FR-IMP-13): спрашиваем, по какому плану создать.
+        with pytest.raises(PreviousCoursesFound):
+            do_import(doctor, department, rows=[("01.12.26", "Имитрон", "")])
+        import_prescription_sheet(
+            doctor,
+            department,
+            sheet(rows=[("01.12.26", "Имитрон", "")]),
+            attending_doctor=doctor,
+            plan=Plan.OTHER,
+        )
 
         assert Program.objects.count() == 2
 
@@ -268,3 +282,52 @@ class TestImportScreens:
         client.force_login(rehab)
 
         assert client.get(self.url).status_code == 403
+
+
+class TestEveningIndividual:
+    """Мото-Л / Артромот — одно из индивидуальных, вечером, без строки в карте (FR-SCH-8)."""
+
+    def test_moto_l_is_recognized_without_card_row(self, doctor, department):
+        program = do_import(
+            doctor,
+            department,
+            rows=[
+                ("02.10.26", "Индивидуальное занятие ЛФК 30 мин 1 р/д е/д", ""),
+                ("02.10.26", "Мото-Л 30 мин 1 р/д", ""),
+                ("02.10.26", "Артромот 20 мин", ""),
+            ],
+        )
+
+        rows = {p.procedure.name: p for p in program.prescriptions.select_related("procedure")}
+        assert rows["Мото-Л"].procedure.evening_individual
+        assert rows["Артромот"].procedure.evening_individual
+        assert not rows["Мото-Л"].in_card
+        assert not rows["Артромот"].in_card
+        assert rows["Индивидуальное занятие"].in_card
+        assert not program.bookings.filter(procedure__evening_individual=True).exists()
+
+
+class TestDayHospitalGroups:
+    """Группы ДС из листа назначений ставятся по расписанию групп, как группы ЛФК (FR-IMP-14)."""
+
+    def test_groups_from_list_get_sessions(self, doctor, department):
+        from apps.catalog.models import Procedure, ProcedureKind
+        from apps.scheduling.models import Booking, BookingKind
+
+        if not Procedure.objects.filter(kind=ProcedureKind.DS_GROUP).exists():
+            pytest.skip("нет файла групп ДС")
+        program = do_import(
+            doctor,
+            department,
+            rows=[
+                ("02.10.26", "Групповые занятия ЛФК\n- спина\n- ШОП\n30 мин 2 р/д е/д", ""),
+                ("02.10.26", "Массаж плечевого сустава", ""),
+            ],
+        )
+
+        assert labels(program) == ["ДС: спина", "ДС: ШОП", "Массаж"]
+        bookings = Booking.objects.filter(program=program, kind=BookingKind.DS_GROUP)
+        assert {b.procedure.name for b in bookings} == {"ДС: спина", "ДС: ШОП"}
+        # Каждый день занятий — по одному занятию каждой группы.
+        days = (program.end_date - program.start_date).days - 1
+        assert bookings.count() == 2 * days

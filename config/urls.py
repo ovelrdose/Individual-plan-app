@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.urls import include, path
 from django.views.generic import RedirectView
 
+from apps.live import views as live_views
 from apps.scheduling import views as scheduling_views
 
 admin.site.site_header = "Программа реабилитации — администрирование"
@@ -16,6 +17,8 @@ urlpatterns = [
     path("schedule/", include("apps.scheduling.urls")),
     # Публичная шахматка без входа (FR-ACC-5): сети задаёт PUBLIC_BOARD_NETWORKS.
     path("board/", scheduling_views.public_board, name="public_board"),
+    # Поток событий для обновления страниц в реальном времени (NFR-11).
+    path("events/", live_views.events, name="live_events"),
     path("catalog/", include("apps.catalog.urls")),
     path("staff/", include("apps.staff.urls")),
     path("accounts/", include("apps.accounts.urls")),

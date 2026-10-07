@@ -28,6 +28,11 @@ def build_card_data(program: Program) -> CardData:
         age=program.age,
         doctor=str(program.attending_doctor),
         course_dates=tuple(program.course_dates()),
+        rest_dates=frozenset(
+            {program.start_date, program.end_date}
+            | {day for day in program.course_dates() if program.is_absent(day)}
+        ),
+        withdrawn_on=program.withdrawal.date_from if program.withdrawal else None,
         # Верхний блок «Расписание занятий» — типичный день по сетке слотов, с окнами (FR-CRD-2).
         schedule=tuple(
             ScheduleItem(time(row.start // 60, row.start % 60), row.label, row.place)

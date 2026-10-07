@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}Пациент уже лечился{% endblock %}
+
+{% block content %}
+  {# Прошлые курсы пациента (FR-IMP-13): по какому плану создать новую программу. #}
+  <h1 class="h3 mb-1">Пациент уже лечился в отделении</h1>
+  <p class="text-body-secondary">
+    <strong>{{ sheet.full_name }}</strong>{% if sheet.history_number %}, ИБ № {{ sheet.history_number }}{% endif %}.
+    Найдены прошлые курсы с тем же ФИО — проверьте, что это тот же пациент, и выберите, откуда взять назначения.
+    Шапка (ИБ, палата, ШРМ, даты курса) берётся из нового листа в любом случае.
+  </p>
+
+  {% for course, lines in courses %}
+    <div class="card mb-3" style="max-width: 60rem">
+      <div class="card-header d-flex flex-wrap align-items-baseline gap-2">
+        <strong>Курс {{ course.start_date|date:"d.m.Y" }} – {{ course.end_date|date:"d.m.Y" }}</strong>
+        <span class="text-body-secondary">ШРМ {{ course.shrm }} · палата {{ course.room }}{% if course.history_number %} · ИБ № {{ course.history_number }}{% endif %}{% if course.diagnosis %} · {{ course.diagnosis }}{% endif %} · {{ course.attending_doctor }}</span>
+        {% if course.withdrawal %}<span class="badge text-bg-danger">{{ course.withdrawal }}</span>{% endif %}
+        <a href="{% url 'programs:detail' course.pk %}" class="ms-auto small" target="_blank">открыть</a>
+      </div>
+      <div class="card-body">
+        <table class="table table-sm align-middle mb-3">
+          <thead>
+            <tr><th>Назначение</th><th>Прошлый курс</th><th>Новый лист</th><th></th></tr>
+          </thead>
+          <tbody>
+            {% for line in lines %}
+              <tr class="{% if line.state == 'added' %}table-success{% elif line.state == 'removed' %}table-danger{% elif line.state == 'changed' %}table-warning{% endif %}">
+                <td>{{ line.label }}</td>
+                <td>{{ line.old|default:"—" }}</td>
+                <td>{{ line.new|default:"—" }}</td>
+                <td class="small text-body-secondary">
+                  {% if line.state == 'added' %}новое{% elif line.state == 'removed' %}было только в прошлом{% elif line.state == 'changed' %}изменилось{% else %}совпадает{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <form method="post" action="{% url 'exchange:sheet_import_force' %}" class="d-flex flex-wrap gap-2">
+          {% csrf_token %}
+          <input type="hidden" name="token" value="{{ token }}">
+          <input type="hidden" name="previous" value="{{ course.pk }}">
+          <button type="submit" name="plan" value="sheet" class="btn btn-success">
+            <i class="bi bi-file-earmark-text"></i> Создать по новому листу
+          </button>
+          <button type="submit" name="plan" value="previous" class="btn btn-outline-primary">
+            <i class="bi bi-arrow-repeat"></i> Взять прошлый план
+          </button>
+          <span class="form-text align-self-center">Прошлый план — назначения и группа бассейна из этого курса.</span>
+        </form>
+      </div>
+    </div>
+  {% endfor %}
+
+  <form method="post" action="{% url 'exchange:sheet_import_force' %}">
+    {% csrf_token %}
+    <input type="hidden" name="token" value="{{ token }}">
+    <button type="submit" name="plan" value="other" class="btn btn-outline-secondary">Это другой пациент — создать по листу без связи</button>
+  </form>
+{% endblock %}

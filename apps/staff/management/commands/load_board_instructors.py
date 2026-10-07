@@ -23,7 +23,7 @@ from django.db import transaction
 from apps.catalog.models import GroupSession, InstructorSlot, Procedure, ProcedureKind
 from apps.exchange.instructor_board import BoardStaff, normalize_group, read_board_staff
 from apps.programs.models import Program
-from apps.scheduling.models import Booking, StaffChange
+from apps.scheduling.models import Booking
 from apps.scheduling.services import replan
 from apps.staff.models import (
     Instructor,
@@ -143,8 +143,6 @@ class Command(BaseCommand):
             return []
         ids = [item.pk for item in others]
         Booking.objects.filter(instructor_id__in=ids).delete()
-        Program.objects.filter(preferred_instructor_id__in=ids).update(preferred_instructor=None)
-        StaffChange.objects.filter(instructor_id__in=ids).delete()
         InstructorBlock.objects.filter(instructor_id__in=ids).delete()
         InstructorDuty.objects.filter(instructor_id__in=ids).delete()
         ShiftException.objects.filter(instructor_id__in=ids).delete()

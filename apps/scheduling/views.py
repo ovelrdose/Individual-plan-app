@@ -1,6 +1,6 @@
 import ipaddress
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import date, time, timedelta
 from urllib.parse import quote
 
 from django.conf import settings
@@ -19,24 +19,10 @@ from apps.catalog.models import Equipment, GroupSession, InstructorSlot, Procedu
 from apps.programs.models import Prescription, Program
 from apps.programs.services import get_program_or_404
 from apps.staff.models import Instructor
-from apps.staff.services import can_manage_staff
 
-from . import board, manual, reports, services, staff_changes
-from .domain import is_weekend
+from . import board, board_days, manual, reports, services, staff_changes
 from .forms import EquipmentForm, GroupSessionForm
-from .models import Booking, BookingKind, StaffChange
-
-
-@require_POST
-def program_replan(request: HttpRequest, pk: int) -> HttpResponse:
-    """«Подобрать заново» — например, после изменения расписания групп (специалист ФР)."""
-    program = get_program_or_404(request.user, pk)
-    proposal = services.replan_by(request.user, program)
-    if proposal.conflicts:
-        messages.warning(request, "Расписание подобрано, но есть конфликты — см. ниже.")
-    else:
-        messages.success(request, "Расписание подобрано заново.")
-    return redirect("programs:detail", pk=pk)
+from .models import GROUP_BOOKING_KINDS, Booking, BookingKind
 
 
 @require_POST
@@ -53,22 +39,7 @@ def program_pool_group(request: HttpRequest, pk: int, prescription_pk: int) -> H
     return _schedule_response(request, program, error, pool_error=error)
 
 
-@require_POST
-def program_preferred_instructor(request: HttpRequest, pk: int) -> HttpResponse:
-    """Инструктор по желанию пациента (HTMX, решение 44): возвращает блок расписания."""
-    program = get_program_or_404(request.user, pk)
-    error = ""
-    try:
-        instructor = _choice(
-            request, program, "instructor", Instructor, "Выберите инструктора из списка."
-        )
-        services.choose_preferred_instructor(request.user, program, instructor)
-    except services.ScheduleError as exc:
-        error = str(exc)
-    return _schedule_response(request, program, error, preferred_error=error)
-
-
-def _choice[T: (Procedure, Instructor)](
+def _choice[T: Procedure](
     request: HttpRequest, program: Program, field: str, model: type[T], message: str
 ) -> T | None:
     """Значение из списка выбора: пусто — снять выбор; неверное значение — ошибка, выбор не
@@ -208,6 +179,7 @@ def _equipment_response(request, **kwargs) -> HttpResponse:
 
 
 def board_view(request: HttpRequest) -> HttpResponse:
+    board_days.ensure_boards()
     day = _board_day(request.GET.get("date"))
     return render(request, "scheduling/board.html", {"board": board.board(request.user, day)})
 
@@ -221,13 +193,15 @@ def board_cell(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def board_place(request: HttpRequest) -> HttpResponse:
-    cell = _cell(request, request.POST)
+    """Поставить пациента: из списка ячейки, перетаскиванием из блока или из панели пациента
+    (ячейка — в поле ``target`` «инструктор:слот»)."""
+    cell = _cell(request, _with_target(request.POST))
     program = get_object_or_404(Program, pk=_int(request.POST.get("program")))
     return _act(
         request,
         cell,
-        lambda reason: board.place_patient(
-            request.user, program, cell.instructor, cell.slot, cell.day, reason=reason
+        lambda _reason: board.place_patient(
+            request.user, program, cell.instructor, cell.slot, cell.day
         ),
         "Пациент поставлен.",
     )
@@ -235,19 +209,48 @@ def board_place(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def board_move(request: HttpRequest, pk: int) -> HttpResponse:
+    """Перенести пациента в ячейку ``target`` (из панели или перетаскиванием). Итог и ошибки
+    показываются в панели ячейки, куда переносили."""
     booking = get_object_or_404(Booking, pk=pk, kind=BookingKind.INDIVIDUAL)
-    cell = _cell(request, request.POST)
-    instructor_pk, _sep, slot_pk = request.POST.get("target", "").partition(":")
-    instructor = get_object_or_404(Instructor, pk=_int(instructor_pk))
-    slot = get_object_or_404(InstructorSlot, pk=_int(slot_pk))
+    cell = _cell(request, _with_target(request.POST))
     version = _int(request.POST.get("version"))
     return _act(
         request,
         cell,
-        lambda reason: board.move_patient(
-            request.user, booking, version, instructor, slot, reason=reason
+        lambda _reason: board.move_patient(
+            request.user, booking, version, cell.instructor, cell.slot
         ),
         "Пациент перенесён.",
+    )
+
+
+@require_POST
+def board_equipment_move(request: HttpRequest, pk: int) -> HttpResponse:
+    """Перенести пациента на другое время тренажёра перетаскиванием (FR-SCH-10a). Сверх
+    вместимости или вне окна — панель с вопросом о причине, ошибка — панель с текстом."""
+    if not board.can_edit_board(request.user):
+        raise PermissionDenied("Шахматку правит специалист ФР.")
+    booking = get_object_or_404(
+        Booking.objects.select_related("program", "equipment"), pk=pk, kind=BookingKind.EQUIPMENT
+    )
+    try:
+        start = time.fromisoformat(request.POST.get("start", "").strip())
+    except ValueError:
+        raise Http404("Неверное время.") from None
+    version = _int(request.POST.get("version"))
+    context = {"booking": booking, "start": start, "version": version}
+    try:
+        board.move_equipment(request.user, booking, version, start, request.POST.get("reason", ""))
+    except board.ConfirmationRequired as error:
+        return render(
+            request, "scheduling/_board_equipment.html", {**context, "confirm": error.violations}
+        )
+    except board.BoardError as error:
+        return render(request, "scheduling/_board_equipment.html", {**context, "error": str(error)})
+    return render(
+        request,
+        "scheduling/_board_done.html",
+        {"done": "Время тренажёра изменено.", "board": board.board(request.user, booking.date)},
     )
 
 
@@ -260,8 +263,74 @@ def board_remove(request: HttpRequest, pk: int) -> HttpResponse:
         request,
         cell,
         lambda _reason: board.remove_patient(request.user, booking, version),
-        "Занятие на эту дату убрано — подбор его не вернёт.",
+        "Пациент убран из сетки — он в блоке «Отменены».",
     )
+
+
+@require_POST
+def board_note(request: HttpRequest, pk: int) -> HttpResponse:
+    booking = get_object_or_404(Booking, pk=pk, kind=BookingKind.INDIVIDUAL)
+    cell = _cell(request, request.POST)
+    version = _int(request.POST.get("version"))
+    return _act(
+        request,
+        cell,
+        lambda _reason: board.set_note(
+            request.user, booking, version, request.POST.get("note", "")
+        ),
+        "Пометка сохранена.",
+    )
+
+
+def board_patient(request: HttpRequest) -> HttpResponse:
+    """Панель пациента из блока «Не распределены» / «Отменены»: выбрать ячейку и поставить."""
+    if not board.can_edit_board(request.user):
+        raise PermissionDenied("Шахматку правит специалист ФР.")
+    day = _board_day(request.GET.get("date"))
+    candidate = next(
+        (
+            item
+            for item in board.programs_for_cell(request.user, day)
+            if item.program.pk == _int(request.GET.get("program"))
+        ),
+        None,
+    )
+    if candidate is None:
+        raise Http404("Пациента нет среди пациентов на лечении в этот день.")
+    return render(
+        request,
+        "scheduling/_board_patient.html",
+        {
+            "day": day,
+            "candidate": candidate,
+            "targets": _targets(day),
+            "busy": board.busy_json(
+                board.occupied({candidate.program.pk}, day).get(candidate.program.pk, [])
+            ),
+        },
+    )
+
+
+def _targets(day: date) -> list[tuple[str, str, InstructorSlot]]:
+    """Ячейки для списка «Перенести в…»; слот — чтобы подсветить время, где пациент занят."""
+    return [
+        (
+            f"{instructor.pk}:{slot.pk}",
+            f"{slot.start:%H:%M} — {instructor.short_name}"
+            + (" (вечер)" if slot.is_evening else ""),
+            slot,
+        )
+        for instructor, slot in board.free_seats(day)
+    ]
+
+
+def _with_target(data) -> dict:
+    """«инструктор:слот» из списка ячеек — в поля instructor и slot."""
+    values = {key: data.get(key, "") for key in ("date", "instructor", "slot")}
+    target = data.get("target", "")
+    if target:
+        values["instructor"], _sep, values["slot"] = target.partition(":")
+    return values
 
 
 @require_POST
@@ -273,6 +342,8 @@ def board_block(request: HttpRequest) -> HttpResponse:
     except ValueError:
         return _panel(request, cell, error="Неверная дата «по дату».")
 
+    session = _session(request.POST)
+
     def action(_reason: str) -> None:
         result = board.add_block(
             request.user,
@@ -282,12 +353,67 @@ def board_block(request: HttpRequest) -> HttpResponse:
             request.POST.get("kind", ""),
             request.POST.get("label", ""),
             until_day,
+            group_session=session,
+            with_partner=bool(request.POST.get("partner")),
         )
         if result.skipped:
             days = ", ".join(f"{day:%d.%m}" for day in result.skipped)
             raise _Done(f"Блок поставлен. Пропущены даты с пациентом в ячейке: {days}.")
 
     return _act(request, cell, action, "Блок поставлен.")
+
+
+@require_POST
+def board_duty(request: HttpRequest) -> HttpResponse:
+    """Постоянный распорядок из ячейки: с даты ячейки, бессрочно или по дату (FR-STF-5)."""
+    cell = _cell(request, request.POST)
+    until = request.POST.get("until", "").strip()
+    try:
+        until_day = date.fromisoformat(until) if until else None
+    except ValueError:
+        return _panel(request, cell, error="Неверная дата «по дату».")
+    session = _session(request.POST)
+    return _act(
+        request,
+        cell,
+        lambda _reason: board.add_duty(
+            request.user,
+            cell.instructor,
+            cell.slot,
+            cell.day,
+            request.POST.get("kind", ""),
+            request.POST.get("label", ""),
+            until_day,
+            group_session=session,
+            with_partner=bool(request.POST.get("partner")),
+        ),
+        f"Распорядок поставлен с {cell.day:%d.%m}.",
+    )
+
+
+@require_POST
+def board_duty_end(request: HttpRequest) -> HttpResponse:
+    """Завершить постоянный распорядок в ячейке с этой даты."""
+    cell = _cell(request, request.POST)
+    return _act(
+        request,
+        cell,
+        lambda _reason: board.end_duty(
+            request.user,
+            cell.instructor,
+            cell.slot,
+            cell.day,
+            with_partner=bool(request.POST.get("partner")),
+        ),
+        f"Распорядок завершён: последний день — {cell.day - timedelta(days=1):%d.%m}.",
+    )
+
+
+def _session(data) -> GroupSession | None:
+    value = data.get("session", "").strip()
+    if not value:
+        return None
+    return get_object_or_404(GroupSession, pk=_int(value), is_active=True)
 
 
 @require_POST
@@ -313,10 +439,15 @@ class _Cell:
 
 
 def _board_day(value: str | None) -> date:
+    """Дата из адреса; без даты — сегодня, а в выходной — следующий будний день. Вперёд —
+    не дальше завтрашней шахматки: будущих шахматок нет, листать туда нечего (FR-SCH-14)."""
+    dates = board_days.board_dates(board_days.today())
     try:
-        return date.fromisoformat(value) if value else timezone.localdate()
+        if value:
+            return min(date.fromisoformat(value), dates[-1])
     except ValueError:
-        return timezone.localdate()
+        pass
+    return dates[0]
 
 
 def _int(value: str | None) -> int:
@@ -374,23 +505,13 @@ def _panel(
         ),
         None,
     )
-    booking = seat.booking if seat else None
-    editable = booking is None or board.can_edit_patient(request.user, booking.program)
-    programs = (
-        board.programs_for_cell(request.user, cell.day)
-        if seat and seat.is_free and not current.is_weekend
-        else []
-    )
-    targets = [
-        (
-            f"{instructor.pk}:{slot.pk}",
-            f"{slot.start:%H:%M} — {instructor.short_name}"
-            + (" (вечер)" if slot.is_evening else ""),
-        )
-        for instructor, slot in (
-            board.free_seats(cell.day, booking) if booking and editable else []
-        )
+    patients = [
+        (patient, board.can_edit_patient(request.user, patient.booking.program))
+        for patient in (seat.patients if seat else [])
     ]
+    can_place = seat is not None and seat.busy is None and current.can_edit
+    candidates = board.programs_for_cell(request.user, cell.day) if can_place else []
+    targets = _targets(cell.day) if any(ok for _p, ok in patients) else []
     return render(
         request,
         "scheduling/_board_cell.html",
@@ -398,29 +519,21 @@ def _panel(
             "cell": cell,
             "seat": seat,
             "weekend": current.is_weekend,
-            "editable": editable,
-            "programs": programs,
-            "many_departments": len({p.department_id for p in programs}) > 1,
+            "can_edit_day": current.can_edit,
+            "patients": patients,
+            "candidates": candidates,
+            "many_departments": len({c.program.department_id for c in candidates}) > 1,
             "targets": targets,
             "block_kinds": [(k.value, k.label) for k in board.CELL_BLOCK_KINDS],
+            "sessions": board.group_sessions_for(cell.slot),
+            "duty": board.duty_at(cell.instructor, cell.slot, cell.day),
+            "partner": cell.instructor.partner
+            if cell.instructor.partner_id and cell.instructor.partner.is_active
+            else None,
             "error": error,
             "confirm": confirm or [],
             "posted": request.POST,
         },
-    )
-
-
-@require_POST
-def board_prefer(request: HttpRequest, pk: int) -> HttpResponse:
-    """«Закрепить за этим инструктором» из ячейки с пациентом (FR-SCH-15)."""
-    booking = get_object_or_404(Booking, pk=pk, kind=BookingKind.INDIVIDUAL)
-    cell = _cell(request, request.POST)
-    return _act(
-        request,
-        cell,
-        lambda _reason: board.prefer_instructor(request.user, booking),
-        f"{booking.instructor.short_name if booking.instructor else 'Инструктор'} — "
-        "инструктор по желанию пациента, индивидуальные пересобраны.",
     )
 
 
@@ -504,11 +617,13 @@ def booking_restore(request: HttpRequest, pk: int, prescription_pk: int) -> Http
 
 
 def _program_booking(request: HttpRequest, pk: int) -> Booking:
-    """Занятие программы, которую пользователь видит; чужое — 404 (FR-ACC-2)."""
+    """Группа, бассейн или тренажёр программы, которую пользователь видит; чужое — 404
+    (FR-ACC-2). Индивидуальные на странице программы не правятся — только в шахматке
+    (FR-SCH-16)."""
     booking = get_object_or_404(
         Booking.objects.select_related(
-            "program", "procedure", "instructor__partner", "slot", "equipment", "group_session"
-        ),
+            "program", "procedure", "equipment", "group_session"
+        ).exclude(kind=BookingKind.INDIVIDUAL),
         pk=pk,
     )
     get_program_or_404(request.user, booking.program_id)
@@ -516,16 +631,7 @@ def _program_booking(request: HttpRequest, pk: int) -> Booking:
 
 
 def _target(booking: Booking, data) -> manual.Target:
-    if booking.kind == BookingKind.INDIVIDUAL:
-        instructor_pk, _sep, slot_pk = data.get("target", "").partition(":")
-        slot = get_object_or_404(InstructorSlot, pk=_int(slot_pk))
-        instructor = (
-            get_object_or_404(Instructor, pk=_int(instructor_pk), is_active=True)
-            if instructor_pk
-            else None
-        )
-        return manual.Target(instructor=instructor, slot=slot)
-    if booking.kind in (BookingKind.LFK_GROUP, BookingKind.POOL):
+    if booking.kind in GROUP_BOOKING_KINDS:
         session = get_object_or_404(GroupSession, pk=_int(data.get("session")), is_active=True)
         return manual.Target(session=session)
     try:
@@ -574,39 +680,16 @@ def _booking_panel(
         raise PermissionDenied("Расписание правит специалист ФР.")
     current = (
         Booking.objects.filter(pk=booking.pk)
-        .select_related("procedure", "instructor", "slot", "equipment", "group_session")
+        .select_related("procedure", "equipment", "group_session")
         .first()
     )
     if current is None:
         return _booking_done(
             request, booking.program, "", error="Занятие уже изменено — обновите страницу."
         )
-    weekend = is_weekend(current.date)
     options: list[tuple[str, str]] = []
     selected = ""
-    if current.kind == BookingKind.INDIVIDUAL:
-        if weekend:
-            options = [
-                (f":{slot.pk}", f"{slot.start:%H:%M}" + (" (вечер)" if slot.is_evening else ""))
-                for slot in InstructorSlot.objects.order_by("start")
-            ]
-            selected = f":{current.slot_id}"
-        else:
-            options = [
-                (
-                    f"{current.instructor_id}:{current.slot_id}",
-                    f"{current.start:%H:%M} — {current.instructor.short_name} (сейчас)",
-                )
-            ] + [
-                (
-                    f"{instructor.pk}:{slot.pk}",
-                    f"{slot.start:%H:%M} — {instructor.short_name}"
-                    + (" (вечер)" if slot.is_evening else ""),
-                )
-                for instructor, slot in board.free_seats(current.date, current)
-            ]
-            selected = options[0][0]
-    elif current.kind in (BookingKind.LFK_GROUP, BookingKind.POOL):
+    if current.kind in GROUP_BOOKING_KINDS:
         options = [
             (str(session.pk), f"{session.start_time:%H:%M} {session.effective_place}".strip())
             for session in current.procedure.sessions.filter(is_active=True).order_by("start_time")
@@ -622,18 +705,9 @@ def _booking_panel(
         {
             "booking": current,
             "program": booking.program,
-            "weekend": weekend,
             "options": options,
-            "selected": request.POST.get("target")
-            or request.POST.get("session")
-            or request.POST.get("start")
-            or selected,
-            "field": {
-                BookingKind.INDIVIDUAL: "target",
-                BookingKind.LFK_GROUP: "session",
-                BookingKind.POOL: "session",
-                BookingKind.EQUIPMENT: "start",
-            }.get(current.kind, "target"),
+            "selected": request.POST.get("session") or request.POST.get("start") or selected,
+            "field": "start" if current.kind == BookingKind.EQUIPMENT else "session",
             "error": error,
             "confirm": confirm or [],
             "posted": request.POST,
@@ -651,41 +725,12 @@ def board_off(request: HttpRequest) -> HttpResponse:
         raise PermissionDenied("Шахматку правит специалист ФР.")
     instructor = get_object_or_404(Instructor, pk=_int(request.POST.get("instructor")))
     day = _board_day(request.POST.get("date"))
-    change = staff_changes.set_not_working(request.user, instructor, day)
-    if change is None:
-        messages.success(request, f"{instructor.short_name}: {day:%d.%m} не работает.")
-        return redirect(f"{reverse('scheduling:board')}?date={day:%Y-%m-%d}")
-    return redirect("scheduling:change", pk=change.pk)
-
-
-def changes(request: HttpRequest) -> HttpResponse:
-    """Последние перестройки — чтобы найти сводку и после ухода со страницы."""
-    _require_staff(request)
-    items = StaffChange.objects.select_related("instructor", "created_by")[:50]
-    return render(request, "scheduling/changes.html", {"changes": items})
-
-
-def change(request: HttpRequest, pk: int) -> HttpResponse:
-    _require_staff(request)
-    item = get_object_or_404(StaffChange.objects.select_related("instructor", "created_by"), pk=pk)
-    problems: list[str] = []
-    if request.method == "POST":
-        try:
-            problems = staff_changes.revert(request.user, item)
-        except manual.EditError as error:
-            messages.error(request, str(error))
-        else:
-            if problems:
-                messages.warning(request, "Вернули не всё — см. список ниже.")
-            else:
-                messages.success(request, "Занятия возвращены на прежние места.")
-        item.refresh_from_db()
-    return render(request, "scheduling/change.html", {"change": item, "problems": problems})
-
-
-def _require_staff(request: HttpRequest) -> None:
-    if not can_manage_staff(request.user):
-        raise PermissionDenied("Сводки перестроек смотрит специалист ФР.")
+    staff_changes.set_not_working(request.user, instructor, day)
+    messages.success(
+        request,
+        f"{instructor.short_name}: {day:%d.%m} не работает — его пациенты в «Не распределены».",
+    )
+    return redirect(f"{reverse('scheduling:board')}?date={day:%Y-%m-%d}")
 
 
 def load(request: HttpRequest) -> HttpResponse:
@@ -714,13 +759,14 @@ def board_export(request: HttpRequest) -> HttpResponse:
 @login_not_required
 def public_board(request: HttpRequest) -> HttpResponse:
     """Публичная шахматка (FR-ACC-5): без входа, только чтение, только из сетей клиники."""
-    if not _public_allowed(request):
+    if not public_board_allowed(request):
         raise Http404("Страница не найдена.")
+    board_days.ensure_boards()
     day = _board_day(request.GET.get("date"))
     return render(request, "scheduling/public_board.html", {"board": board.board(None, day)})
 
 
-def _public_allowed(request: HttpRequest) -> bool:
+def public_board_allowed(request: HttpRequest) -> bool:
     networks = [item.strip() for item in settings.PUBLIC_BOARD_NETWORKS if item.strip()]
     if not networks:
         return True  # локальная разработка: настройка не задана

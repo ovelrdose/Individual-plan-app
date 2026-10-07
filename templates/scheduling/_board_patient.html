@@ -1,0 +1,23 @@
+{# Панель пациента из блока «Не распределены» / «Отменены» (FR-SCH-11): выбрать ячейку и поставить. #}
+<div id="cell-panel" class="card shadow board-panel" data-busy="{{ busy }}">
+  <div class="card-header d-flex align-items-center gap-2 py-2">
+    <strong>{{ candidate.program.room_label }} {{ candidate.program.surname }}, {{ day|date:"d.m" }}</strong>
+    <span class="badge text-bg-secondary">{{ candidate.group_label }}</span>
+    <button type="button" class="btn-close ms-auto" aria-label="Закрыть"
+            onclick="const p = this.closest('#cell-panel'); p.replaceChildren(); p.className = ''"></button>
+  </div>
+  <div class="card-body py-2">
+    {% if candidate.where %}<p class="small mb-2">Уже в сетке: {{ candidate.where }}.</p>{% endif %}
+    <form class="d-flex gap-1" hx-post="{% url 'scheduling:board_place' %}" hx-target="#cell-panel" hx-swap="outerHTML">
+      <input type="hidden" name="date" value="{{ day|date:'Y-m-d' }}">
+      <input type="hidden" name="program" value="{{ candidate.program.pk }}">
+      <label for="patient-target" class="visually-hidden">Ячейка</label>
+      <select id="patient-target" name="target" class="form-select form-select-sm" required>
+        <option value="">Поставить в…</option>
+        {% for value, label, slot in targets %}<option value="{{ value }}" data-from="{{ slot.start|time:'H:i' }}" data-to="{{ slot.end|time:'H:i' }}">{{ label }}</option>{% endfor %}
+      </select>
+      <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-person-plus"></i> Поставить</button>
+    </form>
+    <div class="form-text">Или перетащите пациента из блока в нужную ячейку шахматки.</div>
+  </div>
+</div>

@@ -1,0 +1,26 @@
+{# Вид блока или распорядка: группа — для ведения группы, подпись — для «Прочее». #}
+<div x-data="{ kind: '{% if posted.form == prefix %}{{ posted.kind|escapejs }}{% else %}{{ block_kinds.0.0 }}{% endif %}' }">
+  <select id="{{ prefix }}-kind" name="kind" class="form-select form-select-sm mb-1" x-model="kind" aria-label="Вид">
+    {% for value, label in block_kinds %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+  </select>
+  <select name="session" class="form-select form-select-sm mb-1" x-show="kind === 'GROUP_LEAD'" x-cloak
+          :disabled="kind !== 'GROUP_LEAD'" aria-label="Группа">
+    {% for session in sessions %}
+      <option value="{{ session.pk }}"{% if posted.form == prefix and posted.session == session.pk|stringformat:"d" %} selected{% endif %}>
+        {{ session.start_time|time:"G:i" }} {{ session.procedure.name }}
+      </option>
+    {% empty %}
+      <option value="">в этом слоте групп нет</option>
+    {% endfor %}
+  </select>
+  <input type="text" name="label" maxlength="60" class="form-control form-control-sm mb-1"
+         placeholder="Чем занят инструктор" value="{% if posted.form == prefix %}{{ posted.label }}{% endif %}"
+         x-show="kind === 'OTHER'" x-cloak aria-label="Подпись">
+  {% if partner %}
+    <div class="form-check mb-1">
+      <input class="form-check-input" type="checkbox" name="partner" value="1" id="{{ prefix }}-partner"
+             {% if posted.form != prefix or posted.partner %}checked{% endif %}>
+      <label class="form-check-label small" for="{{ prefix }}-partner">и напарнику — {{ partner.short_name }}</label>
+    </div>
+  {% endif %}
+</div>

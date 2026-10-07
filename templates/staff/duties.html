@@ -5,33 +5,41 @@
 {% block content %}
   <h1 class="h3">Распорядок инструкторов</h1>
   <p class="text-body-secondary">
-    Постоянный распорядок — что инструктор делает в слоте каждый свой рабочий день: ведёт группу,
-    БОС, «Метод. работа», прочее. В такие слоты пациентов не ставят. На конкретную дату распорядок
-    можно заменить или снять разовым блоком.
+    Что инструктор делает в слоте, кроме пациентов: ведёт группу, БОС, «Метод. работа», прочее — в такие
+    слоты пациентов не ставят. Выберите вид и как его ставить, затем щёлкайте по ячейкам. Повторный клик
+    тем же видом снимает его. Часы смены: 2/2 — 8:00–20:00, 5/2 — 8:00–17:00; слоты вне смены заштрихованы.
+    То же можно делать в панели ячейки шахматки.
   </p>
 
-  {% if selected %}
-    <form method="get" class="d-flex align-items-center gap-2 mb-3">
-      <label for="instructor-select" class="form-label mb-0">Инструктор</label>
-      <select id="instructor-select" name="instructor" class="form-select w-auto" onchange="this.form.submit()">
-        {% for item in instructors %}
-          <option value="{{ item.pk }}" {% if item == selected %}selected{% endif %}>{{ item.short_name }}{% if item.partner_id %} (пара {{ item.team_label }}){% endif %}</option>
+  <form id="duty-brush" class="card mb-3" x-data="{ kind: '{{ kinds.0.0 }}' }" onsubmit="return false">
+    <div class="card-body py-2 d-flex flex-wrap align-items-center gap-3">
+      <div class="btn-group btn-group-sm" role="group" aria-label="Вид">
+        {% for value, label in kinds %}
+          <input type="radio" class="btn-check" name="kind" id="brush-{{ value }}" value="{{ value }}" x-model="kind" autocomplete="off">
+          <label class="btn btn-outline-secondary" for="brush-{{ value }}"><span class="duty-swatch duty-{{ value|lower }}"></span> {{ label }}</label>
+        {% endfor %}
+        <input type="radio" class="btn-check" name="kind" id="brush-{{ free }}" value="{{ free }}" x-model="kind" autocomplete="off">
+        <label class="btn btn-outline-secondary" for="brush-{{ free }}"><i class="bi bi-eraser"></i> Свободно</label>
+      </div>
+      <select name="session" class="form-select form-select-sm w-auto" aria-label="Группа"
+              x-show="kind === 'GROUP_LEAD'" x-cloak :disabled="kind !== 'GROUP_LEAD'">
+        {% for session in sessions %}
+          <option value="{{ session.pk }}">{{ session.start_time|time:"G:i" }} {{ session.procedure.name }}</option>
+        {% empty %}
+          <option value="">групп ЛФК нет</option>
         {% endfor %}
       </select>
-      <noscript><button type="submit" class="btn btn-sm btn-outline-secondary">Показать</button></noscript>
-    </form>
-
-    <div class="row g-4">
-      <div class="col-xl-7">
-        <h2 class="h5">Постоянный распорядок</h2>
-        {% include "staff/_duties.html" %}
-      </div>
-      <div class="col-xl-5">
-        <h2 class="h5">Разовые блоки на дату</h2>
-        {% include "staff/_blocks.html" %}
+      <input type="text" name="label" maxlength="60" class="form-control form-control-sm w-auto"
+             placeholder="Чем занят инструктор" aria-label="Подпись"
+             x-show="kind === 'OTHER'" x-cloak :disabled="kind !== 'OTHER'">
+      <div class="btn-group btn-group-sm ms-auto" role="group" aria-label="Как ставить">
+        <input type="radio" class="btn-check" name="mode" id="mode-always" value="always" checked autocomplete="off">
+        <label class="btn btn-outline-primary" for="mode-always" title="Каждый рабочий день с выбранной даты, бессрочно">Постоянно с даты</label>
+        <input type="radio" class="btn-check" name="mode" id="mode-once" value="once" autocomplete="off">
+        <label class="btn btn-outline-primary" for="mode-once" title="Разовый блок: только в выбранную дату">Только на эту дату</label>
       </div>
     </div>
-  {% else %}
-    <p class="text-body-secondary">Действующих инструкторов нет — они заводятся в справочниках.</p>
-  {% endif %}
+  </form>
+
+  {% include "staff/_duty_grid.html" %}
 {% endblock %}

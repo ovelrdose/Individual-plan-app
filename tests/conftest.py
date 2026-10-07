@@ -1,7 +1,12 @@
+from datetime import date, time
+
 import pytest
 
 from apps.accounts.models import Membership, Role, User
+from apps.catalog.models import InstructorSlot
 from apps.org.models import Department
+from apps.staff.models import Instructor, ShiftPattern
+from apps.staff.services import set_partner
 
 PASSWORD = "test-pass-123"
 
@@ -127,4 +132,66 @@ def full_catalog(department):
     docs = Path(settings.BASE_DIR) / "primary_docs"
     if not (docs / "lfk.xlsx").exists():
         pytest.skip("нет файлов заказчика")
-    load_initial_catalog(docs / "lfk.xlsx", docs / "basseyn.xlsx")
+    ds = docs / "Gruppy_DS.xlsx"
+    load_initial_catalog(docs / "lfk.xlsx", docs / "basseyn.xlsx", ds if ds.exists() else None)
+
+
+# --- Шахматка: сетка и вымышленные инструкторы ----------------------------------------------
+# Пара 2/2 Волков (работает 05–06.10, 09–10.10) / Лебедева (07–08.10), Соколов — 5/2.
+
+
+@pytest.fixture
+def slots(db) -> dict[str, InstructorSlot]:
+    grid = [
+        (time(9, 10), time(9, 40), False),
+        (time(9, 50), time(10, 20), False),
+        (time(10, 30), time(11, 0), False),
+        (time(11, 10), time(11, 40), False),
+        (time(18, 0), time(18, 30), True),
+    ]
+    return {
+        f"{start:%-H:%M}": InstructorSlot.objects.create(start=start, end=end, is_evening=evening)
+        for start, end, evening in grid
+    }
+
+
+@pytest.fixture
+def staff(slots) -> dict[str, Instructor]:
+    people = {
+        "volkov": Instructor.objects.create(full_name="Волков В.В.", short_name="Волков"),
+        "lebedeva": Instructor.objects.create(full_name="Лебедева Л.Л.", short_name="Лебедева"),
+        "sokolov": Instructor.objects.create(
+            full_name="Соколов С.С.", short_name="Соколов", display_order=1
+        ),
+    }
+    set_partner(people["volkov"], people["lebedeva"])
+    for key, pattern, anchor in [
+        ("volkov", "2/2", date(2026, 10, 5)),
+        ("lebedeva", "2/2", date(2026, 10, 7)),
+        ("sokolov", "5/2", date(2026, 10, 5)),
+    ]:
+        ShiftPattern.objects.create(
+            instructor=people[key],
+            pattern=pattern,
+            anchor_date=anchor,
+            valid_from=date(2026, 10, 5),
+        )
+    return people
+
+
+@pytest.fixture
+def patient(doctor, make_program, procedures, staff):
+    """make: пациент с индивидуальным занятием (по умолчанию курс 05.10–19.10)."""
+
+    from apps.programs.models import Prescription
+    from apps.programs.services import add_prescription
+
+    def make(room: str = "9", per_day: int = 1, **fields):
+        program = make_program(room=room, full_name=f"Пациентов{room} Тест Тестович", **fields)
+        add_prescription(
+            doctor,
+            Prescription(program=program, procedure=procedures["individual"], per_day=per_day),
+        )
+        return program
+
+    return make
