@@ -43,7 +43,6 @@ class Sheet:
     shrm: int
     room: str
     history_number: str = ""
-    diagnosis: str = ""
     rows: list[SheetRow] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -66,11 +65,13 @@ class Sheet:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Sheet":
+        # Словарь не меняем: он лежит в сессии и должен остаться сериализуемым в JSON.
         rows = []
         for row in data["rows"]:
+            values = dict(row)
             for key in ("prescribed_on", "cancel_date"):
-                row[key] = date.fromisoformat(row[key]) if row[key] else None
-            rows.append(SheetRow(**row))
+                values[key] = date.fromisoformat(values[key]) if values[key] else None
+            rows.append(SheetRow(**values))
         return cls(**{**data, "rows": rows})
 
 
@@ -78,11 +79,11 @@ class Sheet:
 
 HEADER_FIELDS = {
     # ФИО — до следующего поля шапки, а не до двойного пробела: двойной пробел бывает и
-    # внутри ФИО («Тестова  Анна»).
+    # внутри ФИО («Тестова  Анна»). «Диагноз» — только граница ФИО: сам диагноз в систему не
+    # переносится (решение 70).
     "full_name": re.compile(r"ФИО:?\s+(?P<v>.+?)\s*(?=ИБ\s*№|ШРМ|Диагноз|Палата|$)"),
     "history_number": re.compile(r"ИБ\s*№\s*(?P<v>[\w-]+)"),
     "shrm": re.compile(r"ШРМ\s*(?P<v>[345])\b"),
-    "diagnosis": re.compile(r"Диагноз:\s*(?P<v>\S+)"),
     # «5а», «5 а», «9.» → «5а», «5а», «9». Палаты без номера («ВИП») — как написано.
     "room": re.compile(
         r"Палата\s*№\s*(?:(?P<num>\d+)(?:\s?(?P<letter>[а-яёa-z])(?![а-яёa-z]))?|(?P<v>\S+))",
@@ -93,11 +94,10 @@ FIELD_NAMES = {
     "full_name": "ФИО",
     "history_number": "ИБ",
     "shrm": "ШРМ",
-    "diagnosis": "диагноз",
     "room": "палата",
 }
 # Длины — как у полей программы: длиннее значит, что шапка разобрана неверно.
-MAX_LENGTH = {"full_name": 150, "history_number": 20, "diagnosis": 255, "room": 10}
+MAX_LENGTH = {"full_name": 150, "history_number": 20, "room": 10}
 REQUIRED = ("full_name", "shrm", "room")
 
 # --- Таблица назначений (FR-IMP-2…5) ----------------------------------------------------
@@ -169,7 +169,7 @@ def _parse_header(paragraphs: list[str]) -> dict:
     if missing:
         raise SheetError(
             "В шапке листа назначений не найдено: " + ", ".join(missing) + ". "
-            "Ожидается строка вида «ФИО …  ИБ №…  ШРМ 4  Диагноз: …  Палата № …»."
+            "Ожидается строка вида «ФИО …  ИБ №…  ШРМ 4  Палата № …»."
         )
     too_long = [
         FIELD_NAMES[name]

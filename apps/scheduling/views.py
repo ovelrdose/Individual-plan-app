@@ -600,7 +600,7 @@ def booking_unpin(request: HttpRequest, pk: int) -> HttpResponse:
 
 @require_POST
 def booking_restore(request: HttpRequest, pk: int, prescription_pk: int) -> HttpResponse:
-    """«Вернуть» убранное занятие на дату (решение 57)."""
+    """«Вернуть» убранное занятие на дату."""
     program = get_program_or_404(request.user, pk)
     prescription = get_object_or_404(Prescription, pk=prescription_pk, program=program)
     try:
@@ -715,12 +715,13 @@ def _booking_panel(
     )
 
 
-# --- Перестройка при изменении смены (FR-SCH-13, FR-STF-6) ---------------------------------
+# --- Инструктор не работает (FR-STF-6) -----------------------------------------------------
 
 
 @require_POST
 def board_off(request: HttpRequest) -> HttpResponse:
-    """«Не работает» из шахматки одним действием: исключение смены и перестройка (FR-STF-6)."""
+    """«Не работает» из шахматки одним действием: исключение смены, его пациенты — в
+    «Не распределены» (FR-STF-6)."""
     if not board.can_edit_board(request.user):
         raise PermissionDenied("Шахматку правит специалист ФР.")
     instructor = get_object_or_404(Instructor, pk=_int(request.POST.get("instructor")))

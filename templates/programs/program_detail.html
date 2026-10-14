@@ -38,6 +38,11 @@
           <i class="bi bi-arrow-repeat"></i> Повторный курс
         </a>
       {% endif %}
+      {% if can_update_from_sheet %}
+        <a href="{% url 'exchange:sheet_update' program.pk %}" class="btn btn-outline-primary" title="Загрузить новую версию листа назначений">
+          <i class="bi bi-file-earmark-arrow-up"></i> Обновить из листа
+        </a>
+      {% endif %}
       {% if can_edit %}
         <a href="{% url 'programs:edit' program.pk %}" class="btn btn-outline-secondary">
           <i class="bi bi-pencil"></i> Данные пациента и курса
@@ -113,8 +118,7 @@
         <dt class="col-2">Пол, возраст</dt>
         <dd class="col-4">{{ program.get_sex_display|default:"—" }}{% if program.age is not None %}, {{ program.age }}{% endif %}</dd>
         <dt class="col-2">Лечащий врач</dt><dd class="col-4">{{ program.attending_doctor }}</dd>
-        <dt class="col-2">№ ИБ</dt><dd class="col-4">{{ program.history_number|default:"—" }}</dd>
-        <dt class="col-2">Диагноз</dt><dd class="col-4">{{ program.diagnosis|default:"—" }}</dd>
+        <dt class="col-2">№ ИБ</dt><dd class="col-10">{{ program.history_number|default:"—" }}</dd>
         <dt class="col-2">Курс</dt>
         <dd class="col-10 mb-0">
           {{ program.start_date|date:"d.m.Y" }} – {{ program.end_date|date:"d.m.Y" }}

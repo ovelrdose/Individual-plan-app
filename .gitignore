@@ -10,3 +10,4 @@ htmlcov/
 /staticfiles/
 /out/
 .claude
+/primary_docs/test_list/

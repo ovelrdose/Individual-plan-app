@@ -10,6 +10,7 @@ from django.views.decorators.http import require_POST
 
 from apps.accounts.access import current_department, is_admin, role_in
 from apps.accounts.models import Role
+from apps.exchange.services import can_update_from_sheet
 from apps.scheduling import board_days
 from apps.scheduling.services import can_schedule, program_schedule
 
@@ -76,7 +77,6 @@ def program_repeat(request: HttpRequest, pk: int) -> HttpResponse:
         age=previous.age,
         room=previous.room,
         shrm=previous.shrm,
-        diagnosis=previous.diagnosis,
         attending_doctor=doctor,
         start_date=board_days.today(),
         source=ProgramSource.MANUAL,
@@ -169,6 +169,7 @@ def program_detail(request: HttpRequest, pk: int) -> HttpResponse:
             "schedule": program_schedule(program),
             "can_schedule": can_schedule(request.user, program),
             "can_delete": is_admin(request.user),
+            "can_update_from_sheet": can_update_from_sheet(request.user, program),
             "courses": services.patient_courses(program),
             # Повторный курс — у завершённой или выбывшей программы (FR-PRG-10).
             "can_repeat": services.can_create(request.user, program.department)

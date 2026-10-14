@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Изменения из листа — {{ program.full_name }}{% endblock %}
+
+{% block content %}
+  {# Экран изменений перед обновлением программы (FR-IMP-15). #}
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'programs:list' %}">Индивидуальные программы</a></li>
+      <li class="breadcrumb-item"><a href="{% url 'programs:detail' program.pk %}">{{ program.full_name }}</a></li>
+      <li class="breadcrumb-item active" aria-current="page">Изменения из листа</li>
+    </ol>
+  </nav>
+
+  <h1 class="h3 mb-1">Что изменится в программе</h1>
+  <p class="text-body-secondary">
+    {{ program.full_name }}{% if program.history_number %}, ИБ № {{ program.history_number }}{% endif %},
+    курс {{ program.start_date|date:"d.m.Y" }} – {{ program.end_date|date:"d.m.Y" }}.
+  </p>
+
+  {% if update.warnings %}
+    <div class="alert alert-warning" style="max-width: 60rem">
+      <ul class="mb-0">{% for warning in update.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+    </div>
+  {% endif %}
+
+  {% if update.header %}
+    <h2 class="h5">Данные пациента и курса</h2>
+    <table class="table table-sm align-middle" style="max-width: 60rem">
+      <thead><tr><th>Поле</th><th>Было</th><th>Стало</th></tr></thead>
+      <tbody>
+        {% for change in update.header %}
+          <tr class="table-warning"><td>{{ change.label }}</td><td>{{ change.old }}</td><td>{{ change.new }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <h2 class="h5">Назначения</h2>
+  <table class="table table-sm align-middle" style="max-width: 60rem">
+    <thead><tr><th>Назначение</th><th>Было</th><th>Стало</th><th></th></tr></thead>
+    <tbody>
+      {% for line in update.lines %}
+        <tr class="{% if line.state == 'added' %}table-success{% elif line.state == 'cancelled' or line.state == 'deleted' %}table-danger{% elif line.state == 'changed' %}table-warning{% endif %}">
+          <td>{{ line.label }}</td>
+          <td>{{ line.old|default:"—" }}</td>
+          <td>{{ line.new|default:"—" }}</td>
+          <td class="small text-body-secondary">{{ line.state_text }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="4" class="text-body-secondary">Назначений нет.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if not update.has_changes %}
+    <p class="text-body-secondary">Лист совпадает с программой — менять нечего.</p>
+  {% endif %}
+
+  <form method="post" action="{% url 'exchange:sheet_update_apply' %}" class="d-flex gap-2">
+    {% csrf_token %}
+    <input type="hidden" name="token" value="{{ token }}">
+    <button type="submit" class="btn btn-success"><i class="bi bi-check-lg"></i> Применить</button>
+    <a href="{% url 'programs:detail' program.pk %}" class="btn btn-outline-secondary">Отмена</a>
+  </form>
+{% endblock %}

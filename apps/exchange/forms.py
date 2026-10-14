@@ -20,11 +20,24 @@ def import_departments(user: User) -> QuerySet[Department]:
     return departments.filter(memberships__user=user, memberships__role=Role.DOCTOR)
 
 
-class SheetUploadForm(BootstrapFormMixin, forms.Form):
+class SheetFileForm(BootstrapFormMixin, forms.Form):
+    """Только файл листа — для обновления программы из новой версии (FR-IMP-15)."""
+
     file = forms.FileField(
         label="Лист назначений (.docx)",
         widget=forms.ClearableFileInput(attrs={"accept": ".docx"}),
     )
+
+    def clean_file(self):
+        file = self.cleaned_data["file"]
+        if Path(file.name).suffix.lower() != ".docx":
+            raise forms.ValidationError("Нужен файл Word в формате .docx.")
+        if file.size > MAX_FILE_SIZE:
+            raise forms.ValidationError("Файл больше 5 МБ — это не похоже на лист назначений.")
+        return file
+
+
+class SheetUploadForm(SheetFileForm):
     department = forms.ModelChoiceField(
         queryset=Department.objects.none(),
         label="Отделение",
@@ -64,14 +77,6 @@ class SheetUploadForm(BootstrapFormMixin, forms.Form):
         self.needs_doctor_choice = any(role_in(user, d) != Role.DOCTOR for d in departments)
         if not self.needs_doctor_choice:
             del self.fields["attending_doctor"]
-
-    def clean_file(self):
-        file = self.cleaned_data["file"]
-        if Path(file.name).suffix.lower() != ".docx":
-            raise forms.ValidationError("Нужен файл Word в формате .docx.")
-        if file.size > MAX_FILE_SIZE:
-            raise forms.ValidationError("Файл больше 5 МБ — это не похоже на лист назначений.")
-        return file
 
     def clean(self):
         cleaned = super().clean()

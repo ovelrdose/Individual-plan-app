@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}Обновить из листа — {{ program.full_name }}{% endblock %}
+
+{% block content %}
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'programs:list' %}">Индивидуальные программы</a></li>
+      <li class="breadcrumb-item"><a href="{% url 'programs:detail' program.pk %}">{{ program.full_name }}</a></li>
+      <li class="breadcrumb-item active" aria-current="page">Обновить из листа</li>
+    </ol>
+  </nav>
+
+  <h1 class="h3 mb-3">Обновить программу из новой версии листа</h1>
+
+  <div class="row">
+    <div class="col-6">
+      <form method="post" enctype="multipart/form-data" novalidate class="card">
+        <div class="card-body">
+          {% csrf_token %}
+          {% include "includes/form_field.html" with field=form.file %}
+          <button type="submit" class="btn btn-success"><i class="bi bi-upload"></i> Загрузить и показать изменения</button>
+          <a href="{% url 'programs:detail' program.pk %}" class="btn btn-link">Отмена</a>
+        </div>
+      </form>
+    </div>
+    <div class="col-6 text-body-secondary small">
+      <p class="mb-2">Сначала будет показано, что изменится, — программа обновится только после «Применить».</p>
+      <ul class="mb-0">
+        <li>Шапка (ФИО, ИБ, палата, ШРМ) и назначения берутся из листа; начало курса не меняется.</li>
+        <li>Назначения, которых в листе больше нет, отменяются с завтрашнего дня.</li>
+        <li>Прошедшие занятия, группа бассейна и место в шахматке сохраняются.</li>
+      </ul>
+    </div>
+  </div>
+{% endblock %}

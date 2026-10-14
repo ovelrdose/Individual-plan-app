@@ -1,12 +1,11 @@
-"""Захардкоженные обезличенные данные для прототипа карт (фаза 0).
+"""Обезличенные карты ШРМ 3/4/5 для тестов заполнения шаблона.
 
 Время групп — из расписаний lfk.xlsx и basseyn.xlsx. ФИО и врачи вымышленные.
-Модуль остаётся для тестов и команды card_prototype.
 """
 
 from datetime import date, time, timedelta
 
-from .xlsx.data import CardData, CardProcedure, ScheduleItem
+from apps.cards.xlsx.data import CardData, CardProcedure, ScheduleItem
 
 DEPARTMENT = "ОМР № 4"
 COURSE_DAYS = {3: 11, 4: 15, 5: 20}

@@ -63,7 +63,6 @@ class Program(models.Model):
     shrm = models.PositiveSmallIntegerField(
         "ШРМ", choices=[(value, str(value)) for value in SHRM_VALUES]
     )
-    diagnosis = models.CharField("диагноз", max_length=255, blank=True)
     attending_doctor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,

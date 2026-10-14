@@ -111,7 +111,6 @@ def make_program(doctor, department):
             "history_number": "100",
             "room": "9",
             "shrm": 4,
-            "diagnosis": "I69.4",
             "attending_doctor": doctor,
             "start_date": date(2026, 10, 5),
         } | fields

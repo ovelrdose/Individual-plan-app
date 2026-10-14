@@ -2,9 +2,46 @@ from datetime import date
 from io import BytesIO
 
 import pytest
+from docx import Document
 
 from apps.exchange.prescription_sheet import Sheet, SheetError, parse_sheet
-from tests.sheets import make_sheet
+from tests.sheets import COLUMNS, HEADER, make_sheet
+
+HEADER_TEXT = HEADER.format(fio="Тестова Анна Сергеевна", ib="1", shrm=4, dx="I69", room="5")
+PHYSIO = 3  # колонка make_sheet
+
+
+def header(fio: str = "Тестова Анна Сергеевна", rest: str = "ИБ №5402  ШРМ 4  Палата № 5а") -> str:
+    return f"ФИО  {fio}      {rest}"
+
+
+def document(build) -> BytesIO:
+    """Лист с таблицей, которую собирает build(table) — для вариантов, которых нет в make_sheet."""
+    doc = Document()
+    doc.add_paragraph(HEADER_TEXT)
+    table = doc.add_table(rows=1, cols=len(COLUMNS))
+    for cell, title in zip(table.rows[0].cells, COLUMNS, strict=True):
+        cell.text = title
+    build(doc, table)
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def edited(buffer: BytesIO, change) -> BytesIO:
+    """Лист make_sheet, изменённый функцией change(document) — объединения ячеек."""
+    document = Document(buffer)
+    change(document)
+    result = BytesIO()
+    document.save(result)
+    result.seek(0)
+    return result
+
+
+def physio(sheet):
+    return [r.raw_text for r in sheet.rows if not r.consultation]
+
 
 GROUPS = "Групповые занятия ЛФК\n- Эрго общая\n– I can нога\n30 мин 2 р/д е/д"
 
@@ -15,14 +52,15 @@ class TestHeader:
             make_sheet(fio="Тестова Анна Сергеевна", ib="77", shrm=5, dx="I69.4", room="5а")
         )
 
-        assert (sheet.full_name, sheet.history_number, sheet.shrm, sheet.diagnosis, sheet.room) == (
+        assert (sheet.full_name, sheet.history_number, sheet.shrm, sheet.room) == (
             "Тестова Анна Сергеевна",
             "77",
             5,
-            "I69.4",
             "5а",
         )
         assert sheet.warnings == []
+        # Диагноз в систему не переносится (TZ.md, решение 70) — даже во временную сессию.
+        assert "I69.4" not in str(sheet.to_dict())
 
     def test_different_values_in_repeated_header(self):
         sheet = parse_sheet(make_sheet(ib="5402", second_header={"ib": "513402", "room": "7"}))
@@ -40,11 +78,7 @@ class TestHeader:
             make_sheet(header="ФИО  Тестов Тест Тестович      ШРМ 3          Палата № 9")
         )
 
-        assert (sheet.full_name, sheet.history_number, sheet.diagnosis) == (
-            "Тестов Тест Тестович",
-            "",
-            "",
-        )
+        assert (sheet.full_name, sheet.history_number) == ("Тестов Тест Тестович", "")
 
     def test_missing_required_fields(self):
         with pytest.raises(SheetError, match="ШРМ, палата"):
@@ -174,3 +208,225 @@ def test_zip_with_broken_document():
 
     with pytest.raises(SheetError):
         parse_sheet(buffer)
+
+
+# --- Варианты реальных листов (TZ.md, решение 24) -------------------------------------
+
+
+class TestHeaderVariants:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "ФИО\tТестова Анна Сергеевна\tИБ №5402\tШРМ 4\tДиагноз: Т91.3\tПалата № 5а",
+            "ФИО\xa0\xa0Тестова Анна Сергеевна\xa0\xa0ИБ\xa0№5402\xa0ШРМ\xa04\xa0"
+            "Диагноз:\xa0Т91.3\xa0Палата\xa0№\xa05а",
+            "ФИО Тестова Анна Сергеевна ИБ № 5402 ШРМ 4 Диагноз: Т91.3 Палата № 5а",
+        ],
+        ids=["tabs", "nbsp", "single-spaces"],
+    )
+    def test_separators(self, text):
+        sheet = parse_sheet(make_sheet(header=text))
+
+        assert (sheet.full_name, sheet.history_number, sheet.shrm, sheet.room) == (
+            "Тестова Анна Сергеевна",
+            "5402",
+            4,
+            "5а",
+        )
+        assert sheet.warnings == []
+
+    def test_fields_in_other_order(self):
+        sheet = parse_sheet(
+            make_sheet(header="ФИО  Тестов Тест Тестович  Палата № 12  ИБ № 77  ШРМ 5")
+        )
+
+        assert (sheet.full_name, sheet.history_number, sheet.shrm, sheet.room) == (
+            "Тестов Тест Тестович",
+            "77",
+            5,
+            "12",
+        )
+
+    def test_double_surname(self):
+        sheet = parse_sheet(make_sheet(fio="Тестова-Пробная Анна Сергеевна"))
+
+        assert sheet.full_name == "Тестова-Пробная Анна Сергеевна"
+
+    def test_double_space_inside_full_name(self):
+        sheet = parse_sheet(make_sheet(header=header(fio="Тестова  Анна Сергеевна")))
+
+        assert sheet.full_name.split() == ["Тестова", "Анна", "Сергеевна"]
+
+    @pytest.mark.parametrize(
+        ("room", "expected"),
+        [("5а", "5а"), ("5 а", "5а"), ("5А", "5а"), ("9.", "9"), ("12", "12"), ("ВИП", "ВИП")],
+    )
+    def test_room(self, room, expected):
+        assert parse_sheet(make_sheet(room=room)).room == expected
+
+    def test_room_followed_by_word(self):
+        header = "ФИО  Тестова Анна Сергеевна      ШРМ 4      Палата № 5 Диагноз: I69"
+
+        assert parse_sheet(make_sheet(header=header)).room == "5"
+
+    @pytest.mark.parametrize("kwargs", [{"room": "12345678901234"}, {"ib": "1" * 25}])
+    def test_too_long_values(self, kwargs):
+        with pytest.raises(SheetError, match="слишком длинные"):
+            parse_sheet(make_sheet(**kwargs))
+
+
+class TestTableVariants:
+    @pytest.mark.parametrize(
+        ("prescribed", "cancel"),
+        [("2.10.26", "5.10.26"), ("02.10.2026", "05.10.2026"), ("2.10.2026", "05.10.26")],
+    )
+    def test_date_formats(self, prescribed, cancel):
+        (row,) = parse_sheet(make_sheet(rows=[(prescribed, "Имитрон", cancel)])).rows
+
+        assert (row.prescribed_on, row.cancel_date) == (date(2026, 10, 2), date(2026, 10, 5))
+
+    def test_multi_paragraph_cell_with_blank_lines_and_nbsp(self):
+        text = "\nИмитрон\xa0\xa015\xa0мин\n\n \n1\xa0р/д е/д\n"
+
+        (row,) = parse_sheet(make_sheet(rows=[("02.10.26", text, "")])).rows
+
+        assert (row.raw_text.split(), row.duration_min, row.per_day) == (
+            ["Имитрон", "15", "мин", "1", "р/д", "е/д"],
+            15,
+            1,
+        )
+
+    def test_bullets_with_tab_and_em_dash(self):
+        text = "Групповые занятия ЛФК\n-\tЭрго общая\n—  Нейро - тренинг\n30 мин 1 р/д"
+
+        rows = parse_sheet(make_sheet(rows=[("02.10.26", text, "")])).rows
+
+        assert [r.match_text for r in rows] == ["Эрго общая", "Нейро - тренинг"]
+
+    def test_two_group_blocks_in_one_cell(self):
+        text = (
+            "Групповые занятия ЛФК\n- Эрго общая\n30 мин 2 р/д\n"
+            "Групповые занятия ЛФК\n- Нейро-тренинг\n15 мин 1 р/д"
+        )
+
+        rows = parse_sheet(make_sheet(rows=[("02.10.26", text, "")])).rows
+
+        assert [(r.match_text, r.duration_min, r.per_day) for r in rows] == [
+            ("Эрго общая", 30, 1),
+            ("Нейро-тренинг", 15, 1),
+        ]
+
+    def test_extra_line_after_group_list(self):
+        sheet = parse_sheet(
+            make_sheet(
+                rows=[
+                    (
+                        "02.10.26",
+                        "Групповые занятия ЛФК\n- Эрго общая\n30 мин 2 р/д\nМассаж спины",
+                        "",
+                    )
+                ]
+            )
+        )
+
+        assert physio(sheet) == ["Групповые занятия ЛФК: Эрго общая", "Массаж спины"]
+        assert (sheet.rows[0].duration_min, sheet.rows[0].per_day) == (30, 1)
+        assert (sheet.rows[1].duration_min, sheet.rows[1].per_day) == (None, 1)
+        assert "2 р/д на 1 группу" in sheet.warnings[0]
+
+    def test_consultations_with_and_and_dot(self):
+        rows = parse_sheet(
+            make_sheet(diagnostics=["Консультация медицинского психолога и логопеда."])
+        ).rows
+
+        assert [r.match_text for r in rows if r.consultation] == [
+            "медицинского психолога",
+            "логопеда",
+        ]
+
+    def test_consultations_with_colon(self):
+        rows = parse_sheet(make_sheet(diagnostics=["Консультации: психолога, логопеда"])).rows
+
+        assert [r.match_text for r in rows if r.consultation] == ["психолога", "логопеда"]
+
+    def test_consultation_list_continues_on_next_line(self):
+        sheet = parse_sheet(
+            make_sheet(
+                diagnostics=[
+                    "Консультация терапевта, медицинского психолога,\nлогопеда, эрготерапевта\n"
+                    "Гликемический профиль"
+                ]
+            )
+        )
+
+        assert [r.match_text for r in sheet.rows if r.consultation] == [
+            "терапевта",
+            "медицинского психолога",
+            "логопеда",
+            "эрготерапевта",
+        ]
+
+    def test_vertically_merged_physio_cell_is_read_once(self):
+        def build(doc, table):
+            first, second = table.add_row().cells, table.add_row().cells
+            first[2].text, first[3].text = "02.10.26", "Имитрон 15 мин 1 р/д"
+            first[3].merge(second[3])
+
+        assert physio(parse_sheet(document(build))) == ["Имитрон 15 мин 1 р/д"]
+
+    def test_horizontally_merged_header_does_not_crash(self):
+        def merge(document):
+            table = document.tables[0]
+            table.cell(0, 0).merge(table.cell(0, 1))
+
+        buffer = edited(make_sheet(rows=[("02.10.26", "Имитрон", "05.10.26")]), merge)
+
+        rows = parse_sheet(buffer).rows
+        assert rows[0].raw_text == "Имитрон"
+        assert rows[0].cancel_date == date(2026, 10, 5)
+
+    def test_short_row_does_not_fail(self):
+        def build(doc, table):
+            row = table.add_row()
+            row.cells[2].text, row.cells[3].text = "02.10.26", "Имитрон 15 мин"
+            # Удаляем хвостовые ячейки строки — так бывает в документах, правленных руками.
+            for tc in row._tr.tc_lst[4:]:
+                row._tr.remove(tc)
+
+        sheet = parse_sheet(document(build))
+
+        assert physio(sheet) == ["Имитрон 15 мин"]
+        assert sheet.rows[0].cancel_date is None
+
+    def test_empty_table_before_the_real_one(self):
+        def build(doc, table):
+            row = table.add_row()
+            row.cells[2].text, row.cells[3].text = "02.10.26", "Имитрон"
+            empty = doc.add_table(rows=0, cols=2)
+            table._tbl.addprevious(empty._tbl)
+
+        assert physio(parse_sheet(document(build))) == ["Имитрон"]
+
+    def test_title_row_above_header(self):
+        def build(doc, table):
+            row = table.add_row()
+            row.cells[2].text, row.cells[3].text = "02.10.26", "Имитрон"
+            title = table.add_row()
+            title._tr.getparent().remove(title._tr)
+            table._tbl.tr_lst[0].addprevious(title._tr)
+            title.cells[0].text = "Назначения"
+
+        assert physio(parse_sheet(document(build))) == ["Имитрон"]
+
+    def test_absurd_dosage_is_a_warning(self):
+        sheet = parse_sheet(make_sheet(rows=[("02.10.26", "Имитрон 40000 мин 99 р/д", "")]))
+
+        assert (sheet.rows[0].duration_min, sheet.rows[0].per_day) == (None, 1)
+        assert len(sheet.warnings) == 2
+
+    def test_course_starts_by_physio_not_by_consultation(self):
+        sheet = parse_sheet(
+            make_sheet(rows=[("05.10.26", "Имитрон", "")], diagnostics=["Консультация терапевта"])
+        )
+
+        assert sheet.start_date == date(2026, 10, 5)

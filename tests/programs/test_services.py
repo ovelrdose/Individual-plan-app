@@ -84,7 +84,7 @@ class TestEndDate:
         services.save_program(doctor, program, end_date_changed=True)
 
     def test_optional_fields(self, make_program):
-        program = make_program(sex="", age=None, history_number="", diagnosis="")
+        program = make_program(sex="", age=None, history_number="")
 
         program.full_clean()
 

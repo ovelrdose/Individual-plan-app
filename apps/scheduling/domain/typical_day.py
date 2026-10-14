@@ -61,7 +61,7 @@ def typical_day(items: list[ScheduledItem]) -> list[TypicalRow]:
             typical, _ = min(counts.items(), key=lambda kv: (-kv[1], kv[0]))
             start, end, place = typical
             # Инструктор — самый частый в типичное время. Пустой (индивидуальное в выходной
-            # ведёт дежурный 2/2, решение 56) — не отклонение.
+            # ведёт дежурный 2/2) — не отклонение.
             whos = Counter(
                 i.who for i in slots.values() if i.who and (i.start, i.end, i.place) == typical
             )

@@ -4,7 +4,9 @@ import pytest
 from django.urls import reverse
 
 from apps.accounts.models import Role
+from apps.cards.models import CardExport
 from apps.programs.models import Prescription, Program
+from apps.scheduling.models import Booking
 
 
 def form_data(doctor, **fields):
@@ -15,7 +17,6 @@ def form_data(doctor, **fields):
         "history_number": "",
         "room": "5а",
         "shrm": "3",
-        "diagnosis": "",
         "attending_doctor": doctor.pk,
         "start_date": "2026-10-05",
         "end_date": "",
@@ -259,3 +260,65 @@ class TestPrescriptionScreens:
         response = client.get(reverse("catalog:procedure_search"), {"q": query})
 
         assert [p.name for p in response.context["procedures"]] == expected
+
+
+class TestDepartmentVisibility:
+    """Все сотрудники отделения видят все его программы (TZ.md, решение 37)."""
+
+    def test_rehab_sees_program_created_by_doctor(self, client, rehab, make_program):
+        program = make_program(start_date=date.today())
+        client.force_login(rehab)
+
+        assert program.full_name in client.get(reverse("programs:list")).content.decode()
+        detail = client.get(reverse("programs:detail", args=[program.pk]))
+        assert detail.status_code == 200
+        assert program.department.name in detail.content.decode()
+        assert client.get(reverse("cards:download", args=[program.pk])).status_code == 200
+
+
+class TestDeleteProgram:
+    """Удаляет только администратор (TZ.md, решение 39)."""
+
+    def test_only_admin(self, client, doctor, rehab, make_program):
+        program = make_program()
+        url = reverse("programs:delete", args=[program.pk])
+
+        for user in (doctor, rehab):
+            client.force_login(user)
+            assert client.get(url).status_code == 403
+            assert client.post(url).status_code == 403
+            assert (
+                "Удалить"
+                not in client.get(reverse("programs:detail", args=[program.pk])).content.decode()
+            )
+        assert Program.objects.filter(pk=program.pk).exists()
+
+    def test_admin_deletes_with_everything(
+        self, client, admin_user, doctor, make_program, procedures
+    ):
+        program = make_program()
+        item = Prescription.objects.create(program=program, procedure=procedures["group"])
+        Booking.objects.create(
+            program=program,
+            prescription=item,
+            procedure=item.procedure,
+            kind="LFK_GROUP",
+            date=program.start_date,
+            start="09:10",
+            end="09:40",
+        )
+        CardExport.objects.create(program=program, user=doctor)
+        client.force_login(admin_user)
+        url = reverse("programs:delete", args=[program.pk])
+
+        confirm = client.get(url)
+        response = client.post(url, follow=True)
+
+        assert "Удалить программу?" in confirm.content.decode()
+        assert response.redirect_chain[-1][0] == reverse("programs:list")
+        assert "удалена" in response.content.decode()
+        assert not Program.objects.exists()
+        assert not Prescription.objects.exists()
+        assert not Booking.objects.exists()
+        assert not CardExport.objects.exists()
+        assert Program.history.filter(history_type="-").get().history_user == admin_user

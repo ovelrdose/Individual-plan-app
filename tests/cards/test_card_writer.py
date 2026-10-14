@@ -6,9 +6,9 @@ import pytest
 from openpyxl import load_workbook
 
 from apps.cards.card_templates import bundled_mappings, bundled_template
-from apps.cards.prototype import sample_card
 from apps.cards.xlsx.data import CardProcedure, ScheduleItem
 from apps.cards.xlsx.writer import DATE_FORMAT, TIME_FORMAT, CardRenderError, render_card
+from tests.cards.samples import sample_card
 
 MAPPINGS = bundled_mappings()
 

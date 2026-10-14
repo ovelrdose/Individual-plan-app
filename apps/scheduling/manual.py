@@ -3,7 +3,7 @@
 
 Любая правка проходит единый валидатор (FR-SCH-5) и закрепляется (``pinned``); после неё
 расписание программы пересобирается, чтобы предупреждения и конфликты были свежими. Убранное
-занятие запоминается (``RemovedSession``, решение 57) — подбор его не возвращает.
+занятие запоминается (``RemovedSession``) — подбор его не возвращает.
 
 Порядок блокировок тот же, что у подбора: программа → тренажёры → инструкторы (по pk).
 """
@@ -380,7 +380,7 @@ def _require_not_individual(booking: Booking) -> None:
 
 @transaction.atomic
 def remove_booking(user: User, booking: Booking, version: int, *, scope: str = ONE) -> EditResult:
-    """Убрать занятие на дату или «эту и все следующие»: подбор его не вернёт (решение 57)."""
+    """Убрать занятие на дату или «эту и все следующие»: подбор его не вернёт."""
     _require_not_individual(booking)
     program = lock_program(booking.program)
     require_edit(user, program)

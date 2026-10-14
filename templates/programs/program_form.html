@@ -30,7 +30,6 @@
       <div class="col-3">{% include "includes/form_field.html" with field=form.history_number %}</div>
       <div class="col-4">{% include "includes/form_field.html" with field=form.attending_doctor %}</div>
     </div>
-    {% include "includes/form_field.html" with field=form.diagnosis %}
     <div class="row">
       <div class="col-4">{% include "includes/form_field.html" with field=form.start_date %}</div>
       <div class="col-8">{% include "includes/form_field.html" with field=form.end_date %}</div>
@@ -45,7 +44,7 @@
           {% for course, copy, link in courses %}
             <div class="mb-2">
               <div><strong>{{ course.start_date|date:"d.m.Y" }} – {{ course.end_date|date:"d.m.Y" }}</strong>,
-                ШРМ {{ course.shrm }}{% if course.diagnosis %}, {{ course.diagnosis }}{% endif %}
+                ШРМ {{ course.shrm }}
                 {% if course.withdrawal %}<span class="badge text-bg-danger">{{ course.withdrawal }}</span>{% endif %}
                 <a href="{% url 'programs:detail' course.pk %}" target="_blank" class="small">открыть</a></div>
               <div class="form-check">

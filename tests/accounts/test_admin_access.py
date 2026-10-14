@@ -4,7 +4,8 @@ import pytest
 from django.urls import reverse
 
 from apps.accounts.admin_access import REHAB_GROUP, sync_admin_access
-from apps.accounts.models import Membership, Role
+from apps.accounts.models import Membership, Role, User
+from apps.cards.models import CardExport
 from apps.catalog.models import Procedure, ProcedureKind
 
 
@@ -166,3 +167,35 @@ class TestRehabGroupSessions:
         assert {d for d in form.fields["department"].queryset} == {
             rehab.memberships.get().department
         }
+
+
+class TestDeleteUsers:
+    """Журнал выгрузок удалению не мешает, лечащий врач защищён (TZ.md, решение 39)."""
+
+    def test_admin_deletes_user_with_card_exports(
+        self, client, admin_user, make_user, make_program, department
+    ):
+        program = make_program()
+        nurse = make_user("nurse", (department, Role.REHAB))
+        CardExport.objects.create(program=program, user=nurse)
+        client.force_login(admin_user)
+
+        response = client.post(
+            reverse("admin:accounts_user_delete", args=[nurse.pk]), {"post": "yes"}
+        )
+
+        assert response.status_code == 302
+        assert not User.objects.filter(username="nurse").exists()
+        assert CardExport.objects.get().user is None
+
+    def test_attending_doctor_cannot_be_deleted_silently(
+        self, client, admin_user, doctor, make_program
+    ):
+        make_program()
+        client.force_login(admin_user)
+
+        response = client.get(reverse("admin:accounts_user_delete", args=[doctor.pk]))
+
+        assert response.status_code == 200
+        assert response.context["protected"], "админка показывает, что у врача есть программы"
+        assert User.objects.filter(pk=doctor.pk).exists()

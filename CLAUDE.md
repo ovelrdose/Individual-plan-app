@@ -70,10 +70,10 @@ cp .env.example .env                        # и поправить SECRET_KEY, 
 - Все настройки — в `config/settings.py`, значения — из `.env` (образец — `.env.example`). Отдельных файлов dev/prod нет.
 - Выбытие (`TZ.md`, FR-PRG-9): `programs.services.withdraw` / `restore`, запись `Withdrawal`. Дни отсутствия — `Program.gaps` (кэш на экземпляре), их учитывают `is_therapy_day` и `withdrawn_on(day)` для запросов; дальше всё делает `replan`.
 - Повторный курс (FR-PRG-10): `Program.previous`, `programs.services.find_previous_courses` / `copy_plan` / `link_previous` / `patient_courses`; импорт останавливается `PreviousCoursesFound`, пока не выбран `Plan` (`exchange/services.py`), разобранный лист ждёт в сессии (`exchange/views.py`).
+- Обновление из новой версии листа (FR-IMP-15): `exchange/services.preview_sheet_update` / `apply_sheet_update` через общий `_merge` — строки обновляются, а не пересоздаются (занятия, `pool_group`, закреплённое остаются); лист ждёт в сессии с ключом `program` (`exchange/views.py`).
 - Правка индивидуальных — только в шахматке (`apps/scheduling/board.py`: `place_patient`, `move_patient`, `remove_patient`), правка сегодняшней переходит на завтра (`board_days.propagate`). После изменения смены/распорядка — `apps/scheduling/staff_changes` (пациенты уходят в «Не распределены»). `manual.py` — правка групп и тренажёров на странице программы.
 - Экран «Распорядок» (`staff:duties`) — сетка инструкторы × слоты на дату, как «Смены»: клик «кистью» (вид, постоянно с даты / только на дату) — `board.paint_duty` поверх тех же `add_duty`/`end_duty`/`add_block`/`clear_block`, что у панели ячейки шахматки. Распорядок — только в часы смены (`staff/domain.shift_hours`: 2/2 — 8:00–20:00, остальные — 8:00–17:00).
 - Публичная шахматка `/board/` открыта без входа (`@login_not_required`), сети — `PUBLIC_BOARD_NETWORKS`.
-- Прототипы карт: `.venv/bin/python manage.py card_prototype` → `out/`.
 - Пересобрать шаблоны карт из `primary_docs/programm_template.xlsx`: `.venv/bin/python manage.py extract_card_templates`.
 - Не делать коммитов без просьбы.
 
@@ -119,7 +119,7 @@ apps/
     xlsx/            заполнение шаблона (без Django): data, mapping, writer, extract;
                      board — выгрузка шахматки
     resources/card_templates/  shrm3/4/5.xlsx + mapping.json (адреса ячеек)
-    management/commands/       card_prototype, extract_card_templates
+    management/commands/       extract_card_templates
   ...                остальные модули появляются по фазам (TZ.md §10)
 templates/           base.html, includes/ (шапка, сообщения, поле формы), registration/, <app>/
                      фрагменты для HTMX — с подчёркиванием: programs/_prescriptions.html
@@ -144,7 +144,7 @@ out/                 сгенерированные файлы (в .gitignore)
 | ОМР | Отделение медицинской реабилитации (ОМР 1, ОМР 3, ОМР 4…) |
 | ШРМ | Шкала реабилитационной маршрутизации: 3, 4 или 5. Определяет длительность курса: ШРМ3 — 10 дней, ШРМ4 — 14, ШРМ5 — 20 (в карте 11 / 15 / 20 календарных дат, считая день поступления) |
 | Индивидуальная программа | Главная сущность системы (`Program`): программа реабилитации пациента на один курс — данные из листа назначений, назначения и расписание. Печатается как карта. Выписки и истории болезни в системе нет |
-| Лист назначений | Документ врача (Word или выгрузка МИС): ФИО, ИБ, ШРМ, диагноз, палата, назначения. Для карты нужна колонка «Физиотерапия» |
+| Лист назначений | Документ врача (Word или выгрузка МИС): ФИО, ИБ, ШРМ, диагноз, палата, назначения. Диагноз в систему не переносится (решение 70). Для карты нужна колонка «Физиотерапия» |
 | ИБ | Номер истории болезни |
 | ЛФК | Лечебная физкультура; групповые занятия идут по фиксированному расписанию (`lfk.xlsx`) |
 | ЛФК в воде / бассейн | Групповые занятия по типу: верхняя конечность, нижняя конечность, спина (`basseyn.xlsx`). Группа выбирается по назначению врача и времени её занятия |

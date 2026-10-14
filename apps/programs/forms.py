@@ -18,7 +18,6 @@ class ProgramForm(BootstrapFormMixin, forms.ModelForm):
             "history_number",
             "room",
             "shrm",
-            "diagnosis",
             "attending_doctor",
             "start_date",
             "end_date",

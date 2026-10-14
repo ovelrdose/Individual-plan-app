@@ -1,7 +1,8 @@
-"""Импорт листа назначений в программу (TZ.md §6.3)."""
+"""Импорт листа назначений в программу (TZ.md §6.3) и обновление программы из новой версии
+листа (FR-IMP-15)."""
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from enum import StrEnum
 
 from django.core.exceptions import ValidationError
@@ -15,11 +16,19 @@ from apps.catalog.services import visible_procedures
 from apps.org.models import Department
 from apps.programs.domain import course_end, patient_key, sex_from_name
 from apps.programs.models import Prescription, Program, ProgramSource, Withdrawal
-from apps.programs.services import copy_plan, find_previous_courses, save_program
+from apps.programs.services import (
+    ProgramsError,
+    can_edit,
+    copy_plan,
+    find_previous_courses,
+    require_editable,
+    save_program,
+)
+from apps.scheduling import board_days
 from apps.scheduling.services import replan
 
 from .matching import ProcedureRef, match_procedure
-from .prescription_sheet import Sheet
+from .prescription_sheet import Sheet, SheetRow
 
 MAX_FILE_SIZE = 5 * 1024 * 1024
 
@@ -169,7 +178,6 @@ def import_prescription_sheet(
         history_number=sheet.history_number,
         room=sheet.room,
         shrm=sheet.shrm,
-        diagnosis=sheet.diagnosis,
         attending_doctor=attending_doctor,
         start_date=start,
         source=ProgramSource.IMPORT,
@@ -218,23 +226,28 @@ def _create_prescriptions(user: User, program: Program, sheet: Sheet) -> list[st
     for order, (row, procedure, duration) in enumerate(
         _matched_rows(program.department, sheet), start=1
     ):
-        prescription = Prescription(
-            program=program,
-            procedure=procedure,
-            raw_text=row.raw_text,
-            duration_min=duration,
-            per_day=row.per_day,
-            start_date=row.prescribed_on
-            if row.prescribed_on and row.prescribed_on > program.start_date
-            else None,
-            cancel_date=row.cancel_date,
-            in_card=not (procedure and procedure.evening_individual),
-            card_order=order,
-        )
-        warnings += _fit_into_course(prescription)
+        prescription = Prescription(program=program, procedure=procedure)
+        warnings += _fill_from_row(prescription, row, duration, order)
         prescription._history_user = user
         prescription.save()
     return warnings
+
+
+def _fill_from_row(
+    prescription: Prescription, row: SheetRow, duration: int | None, order: int
+) -> list[str]:
+    """Поля назначения из строки листа — одинаково при импорте и обновлении (FR-IMP-15)."""
+    program, procedure = prescription.program, prescription.procedure
+    prescription.raw_text = row.raw_text
+    prescription.duration_min = duration
+    prescription.per_day = row.per_day
+    prescription.start_date = (
+        row.prescribed_on if row.prescribed_on and row.prescribed_on > program.start_date else None
+    )
+    prescription.cancel_date = row.cancel_date
+    prescription.in_card = not (procedure and procedure.evening_individual)
+    prescription.card_order = order
+    return _fit_into_course(prescription)
 
 
 def _fit_into_course(prescription: Prescription) -> list[str]:
@@ -270,3 +283,233 @@ def _fit_into_course(prescription: Prescription) -> list[str]:
     # Исправили — проверяем ещё раз: сохранять недопустимое нельзя даже с предупреждением.
     prescription.full_clean()
     return warnings
+
+
+# --- Обновление программы из новой версии листа (FR-IMP-15) ----------------------------------
+
+# Поля шапки, которые берутся из нового листа. Начало курса не сдвигается (решение 69).
+UPDATE_HEADER = (
+    ("full_name", "ФИО"),
+    ("history_number", "ИБ"),
+    ("room", "Палата"),
+    ("shrm", "ШРМ"),
+)
+LINE_STATES = {
+    "same": "без изменений",
+    "changed": "изменено",
+    "added": "добавлено",
+    "cancelled": "отменено",
+    "deleted": "удалено",
+    "kept": "уже отменено",
+}
+
+
+@dataclass(frozen=True)
+class HeaderChange:
+    label: str
+    old: str
+    new: str
+
+
+@dataclass(frozen=True)
+class UpdateLine:
+    """Назначение на экране изменений: «было» и «стало» (FR-IMP-15)."""
+
+    label: str
+    old: str
+    new: str
+    state: str
+
+    @property
+    def state_text(self) -> str:
+        return LINE_STATES[self.state]
+
+
+@dataclass
+class SheetUpdate:
+    header: list[HeaderChange]
+    lines: list[UpdateLine]
+    warnings: list[str]
+
+    @property
+    def has_changes(self) -> bool:
+        return bool(self.header) or any(line.state not in ("same", "kept") for line in self.lines)
+
+
+def can_update_from_sheet(user: User, program: Program, today: date | None = None) -> bool:
+    """Обновлять из листа можно, пока программу можно править и курс не закончился."""
+    return can_edit(user, program) and not program.is_finished(today or board_days.today())
+
+
+def preview_sheet_update(
+    user: User, program: Program, sheet: Sheet, *, today: date | None = None
+) -> SheetUpdate:
+    """Что изменится в программе, если применить лист. Ничего не сохраняет."""
+    program = Program.objects.select_related("department").get(pk=program.pk)
+    today = today or board_days.today()
+    _require_updatable(user, program, today)
+    update, _saves, _deletes = _merge(program, sheet, today)
+    return update
+
+
+@transaction.atomic
+def apply_sheet_update(
+    user: User, program: Program, sheet: Sheet, *, today: date | None = None
+) -> SheetUpdate:
+    """Обновляет программу из новой версии листа (FR-IMP-15, решение 69): шапка и назначения
+    — из листа; строки обновляются, а не пересоздаются, чтобы их прошедшие занятия, группа
+    бассейна, закреплённые занятия и место в шахматке остались."""
+    program = (
+        Program.objects.select_for_update(of=("self",))
+        .select_related("department")
+        .get(pk=program.pk)
+    )
+    today = today or board_days.today()
+    _require_updatable(user, program, today)
+    update, saves, deletes = _merge(program, sheet, today)
+    for item in deletes:
+        item._history_user = user
+        item.delete()
+    for item in saves:
+        item._history_user = user
+        item.save()
+    program.import_warnings = list(dict.fromkeys([*program.import_warnings, *update.warnings]))
+    # Окончание курса уже посчитано в _merge; save_program проверит назначения и пересоберёт
+    # расписание (replan).
+    save_program(user, program, end_date_changed=False)
+    return update
+
+
+def _require_updatable(user: User, program: Program, today: date) -> None:
+    require_editable(user, program)
+    if program.is_finished(today):
+        raise ProgramsError("Курс уже закончился — обновлять программу из листа поздно.")
+
+
+def _merge(
+    program: Program, sheet: Sheet, today: date
+) -> tuple[SheetUpdate, list[Prescription], list[Prescription]]:
+    """Применяет лист к программе в памяти: что сохранить, что удалить и как это показать.
+    Предпросмотр и применение идут через одну функцию — экран не может разойтись с делом."""
+    warnings = list(sheet.warnings)
+    if program.history_number and sheet.history_number not in ("", program.history_number):
+        warnings.append(
+            f"В листе ИБ № {sheet.history_number}, в программе — № {program.history_number}. "
+            "Проверьте, что это лист того же пациента."
+        )
+    if patient_key(sheet.full_name) != patient_key(program.full_name):
+        warnings.append(
+            f"В листе ФИО «{sheet.full_name}», в программе — «{program.full_name}». "
+            "Проверьте, что это лист того же пациента."
+        )
+    if sheet.start_date and sheet.start_date != program.start_date:
+        warnings.append(
+            f"В листе курс начинается {sheet.start_date:%d.%m.%Y}, в программе — "
+            f"{program.start_date:%d.%m.%Y}. Начало идущего курса при обновлении не меняется; "
+            "если нужно — поправьте его в «Данных пациента и курса»."
+        )
+
+    header = []
+    for field, label in UPDATE_HEADER:
+        old, new = getattr(program, field), getattr(sheet, field)
+        if str(old) != str(new):
+            header.append(HeaderChange(label, str(old) or "—", str(new) or "—"))
+            setattr(program, field, new)
+    program.sex = sex_from_name(program.full_name) or program.sex
+    if not program.end_date_manual:
+        planned = program.planned_end_date()
+        if planned != program.end_date:
+            header.append(
+                HeaderChange(
+                    "Окончание курса", f"{program.end_date:%d.%m.%Y}", f"{planned:%d.%m.%Y}"
+                )
+            )
+            program.end_date = planned
+
+    existing = list(
+        program.prescriptions.select_related("procedure", "pool_group").order_by("card_order", "pk")
+    )
+    for item in existing:
+        item.program = program  # проверки дат — по новому курсу
+    rows = _matched_rows(program.department, sheet)
+    pairs = _pair_rows(rows, existing)
+
+    lines: list[UpdateLine] = []
+    saves: list[Prescription] = []
+    for order, ((row, procedure, duration), item) in enumerate(
+        zip(rows, pairs, strict=True), start=1
+    ):
+        old = f"{item.label}: {_describe(item)}" if item else ""
+        if item is None:
+            item = Prescription(program=program, procedure=procedure)
+        elif procedure is not None:
+            item.procedure = procedure
+        # Если лист снова не распознал строку, остаётся процедура, выбранная врачом в вебе.
+        if duration is None and item.procedure:
+            duration = item.procedure.default_duration_min
+        warnings += _fill_from_row(item, row, duration, order)
+        new = f"{item.label}: {_describe(item)}"
+        state = "added" if not old else "same" if old == new else "changed"
+        lines.append(UpdateLine(item.label, _strip(old, item), _strip(new, item), state))
+        saves.append(item)
+
+    deletes: list[Prescription] = []
+    tomorrow = today + timedelta(days=1)
+    used = {item.pk for item in pairs if item}
+    for item in existing:
+        if item.pk in used:
+            continue
+        old = _describe(item)
+        if item.effective_start > today:
+            deletes.append(item)
+            lines.append(UpdateLine(item.label, old, "", "deleted"))
+            continue
+        if (item.cancel_date and item.cancel_date <= tomorrow) or tomorrow > program.end_date:
+            state = "kept"  # уже отменено или курс кончается сегодня — отменять нечего
+        else:
+            item.cancel_date = tomorrow
+            state = "cancelled"
+        item.card_order = len(saves) + 1
+        warnings += _fit_into_course(item)
+        lines.append(UpdateLine(item.label, old, _describe(item), state))
+        saves.append(item)
+    return SheetUpdate(header, lines, warnings), saves, deletes
+
+
+def _pair_rows(rows: list[tuple], existing: list[Prescription]) -> list[Prescription | None]:
+    """Строке листа — назначение программы: сначала тот же текст строки (врач мог выбрать
+    процедуру нераспознанной строке), затем та же процедура."""
+    free = list(existing)
+    pairs: list[Prescription | None] = [None] * len(rows)
+    for index, (row, _procedure, _duration) in enumerate(rows):
+        text = " ".join(row.raw_text.split())
+        item = next((p for p in free if " ".join(p.raw_text.split()) == text), None)
+        if item:
+            free.remove(item)
+            pairs[index] = item
+    for index, (_row, procedure, _duration) in enumerate(rows):
+        if pairs[index] is None and procedure is not None:
+            item = next((p for p in free if p.procedure_id == procedure.pk), None)
+            if item:
+                free.remove(item)
+                pairs[index] = item
+    return pairs
+
+
+def _describe(item: Prescription) -> str:
+    """«30 мин, 1 р/д, с 05.10, отмена 09.10» — по этому видно, что изменилось."""
+    parts = [_dose(item.duration_min, item.per_day)]
+    if item.start_date:
+        parts.append(f"с {item.start_date:%d.%m}")
+    if item.cancel_date:
+        parts.append(f"отмена {item.cancel_date:%d.%m}")
+    if not item.in_card:
+        parts.append("не в карте")
+    return ", ".join(parts)
+
+
+def _strip(text: str, item: Prescription) -> str:
+    """Название процедуры показывается отдельно — в «было/стало» оно нужно, только если
+    изменилось."""
+    prefix = f"{item.label}: "
+    return text.removeprefix(prefix)

@@ -17,6 +17,6 @@ def department(request: HttpRequest) -> dict:
         "current_role": role,
         "user_is_admin": is_admin(user),
         "can_edit_group_schedule": has_role_anywhere(user, Role.REHAB),
-        # Смены и распорядок инструкторов — те же специалист ФР и администратор (решение 46).
+        # Смены и распорядок инструкторов — те же специалист ФР и администратор.
         "can_manage_staff": has_role_anywhere(user, Role.REHAB),
     }

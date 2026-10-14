@@ -47,7 +47,7 @@ ConfirmationRequired = manual.ConfirmationRequired
 
 
 def can_edit_board(user: User) -> bool:
-    """Шахматку правят специалист ФР (в любом отделении) и администратор (решение 46)."""
+    """Шахматку правят специалист ФР (в любом отделении) и администратор (TZ.md §7.6)."""
     return has_role_anywhere(user, Role.REHAB)
 
 
