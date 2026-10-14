@@ -43,51 +43,85 @@ class ProgramForm(BootstrapFormMixin, forms.ModelForm):
         return cleaned
 
 
-class PrescriptionForm(BootstrapFormMixin, forms.ModelForm):
-    """Новое назначение: процедура выбирается поиском и приходит скрытым полем."""
+class _ProcedurePicker:
+    """Процедура выбирается поиском (catalog:procedure_search) и приходит скрытым полем."""
 
-    procedure = forms.ModelChoiceField(
-        queryset=None,
-        widget=forms.HiddenInput,
-        error_messages={"required": "Выберите процедуру из списка."},
-    )
-
-    class Meta:
-        model = Prescription
-        fields = ["procedure", "duration_min", "per_day", "start_date", "cancel_date", "in_card"]
-        widgets = {"start_date": DateInput(), "cancel_date": DateInput()}
-        labels = {"duration_min": "Мин", "per_day": "Раз/день"}
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields["procedure"].queryset = visible_procedures(self.instance.program.department)
+    def _setup_procedure(self) -> None:
+        procedure = self.fields["procedure"]
+        procedure.queryset = visible_procedures(self.instance.program.department)
+        procedure.required = True
+        procedure.widget = forms.HiddenInput()
+        procedure.error_messages["required"] = "Выберите процедуру из списка."
         # Выбор процедуры в подсказке подставляет её длительность (Alpine.js, x-ref).
         self.fields["duration_min"].widget.attrs["x-ref"] = "duration"
+        self.fields["per_day"].widget.attrs.update({"x-ref": "perDay", "min": 1})
+        # Общая подсказка к датам — одна под обоими полями (панель назначения).
+        self.fields["cancel_date"].help_text = ""
 
     @property
     def procedure_label(self) -> str:
         """Название выбранной процедуры — чтобы после ошибки выбор остался на экране."""
-        procedure = getattr(self, "cleaned_data", {}).get("procedure")
-        return procedure.name if procedure else ""
+        if self.is_bound:
+            procedure = getattr(self, "cleaned_data", {}).get("procedure")
+            return procedure.name if procedure else ""
+        return self.instance.procedure.name if self.instance.procedure else ""
+
+    @property
+    def procedure_id(self) -> str:
+        value = self["procedure"].value()
+        return "" if value is None else str(value)
 
 
-class PrescriptionEditForm(BootstrapFormMixin, forms.ModelForm):
-    """Правка строки, в том числе выбор процедуры для нераспознанной строки из листа."""
+class PrescriptionForm(_ProcedurePicker, BootstrapFormMixin, forms.ModelForm):
+    """Новое назначение."""
 
     class Meta:
         model = Prescription
         fields = ["procedure", "duration_min", "per_day", "start_date", "cancel_date", "in_card"]
         widgets = {"start_date": DateInput(), "cancel_date": DateInput()}
+        labels = {"duration_min": "Мин", "per_day": "Раз в день", "cancel_date": "Отменено с"}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        procedure = self.fields["procedure"]
-        procedure.queryset = visible_procedures(self.instance.program.department).order_by(
-            "kind", "name"
+        self._setup_procedure()
+
+
+class PrescriptionEditForm(_ProcedurePicker, BootstrapFormMixin, forms.ModelForm):
+    """Правка строки, в том числе выбор процедуры для нераспознанной строки из листа."""
+
+    class Meta:
+        model = Prescription
+        fields = [
+            "procedure",
+            "duration_min",
+            "per_day",
+            "start_date",
+            "cancel_date",
+            "in_card",
+            "preferred_time",
+        ]
+        widgets = {"start_date": DateInput(), "cancel_date": DateInput()}
+        labels = {"duration_min": "Мин", "per_day": "Раз в день", "cancel_date": "Отменено с"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._setup_procedure()
+        # Время группы — из её занятий (решение 71); другое время модель всё равно отклонит.
+        procedure = self.instance.procedure
+        times = (
+            sorted(procedure.sessions.filter(is_active=True).values_list("start_time", flat=True))
+            if procedure
+            else []
         )
-        procedure.required = True
-        procedure.empty_label = "— выберите процедуру —"
-        procedure.label_from_instance = lambda p: f"{p.name} · {p.get_kind_display()}"
+        current = self.instance.preferred_time
+        if current and current not in times:
+            times = sorted([*times, current])
+        self.session_times = times
+        self.fields["preferred_time"].help_text = "«Любое» — подбор выберет сам."
+        self.fields["preferred_time"].widget = forms.Select(
+            choices=[("", "любое"), *((t.isoformat(), f"{t:%H:%M}") for t in times)],
+            attrs={"class": "form-select", ":disabled": "id != original"},
+        )
 
 
 class WithdrawalForm(BootstrapFormMixin, forms.Form):

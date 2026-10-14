@@ -127,10 +127,27 @@ def test_short_course_leaves_remaining_dates_empty():
 
 
 def test_too_many_schedule_rows():
+    """Строк больше, чем в карте, и пустых окон, чтобы уступить место, нет."""
     data = sample_card(3)
-    extra = (ScheduleItem(time(17, 0), ""),)
+    busy = tuple(ScheduleItem(time(9 + i, 0), f"Занятие {i}") for i in range(11))
     with pytest.raises(CardRenderError, match="11 строк"):
-        render_card(bundled_template(3), MAPPINGS[3], replace(data, schedule=data.schedule + extra))
+        render_card(bundled_template(3), MAPPINGS[3], replace(data, schedule=busy))
+
+
+def test_evening_individual_replaces_latest_empty_window():
+    """Мото-Л на индивидуальном в 18:00 — одиннадцатая строка; уступает самое позднее
+    пустое окно (TZ.md, решение 71)."""
+    data = sample_card(3)  # 10 дневных строк, последние окна — 15:00, 15:40, 16:20
+    evening = (ScheduleItem(time(18, 0), "Инд.занятие"),)
+
+    sheet = render(3, replace(data, schedule=data.schedule + evening))
+
+    area = MAPPINGS[3].schedule
+    starts = [sheet[f"{area.time_col}{row}"].value for row in area.rows]
+    assert time(16, 20) not in starts
+    assert starts[-1] == time(18, 0)
+    assert sheet[f"{area.label_col}{area.rows[-1]}"].value == "Инд.занятие"
+    assert time(15, 40) in starts, "убирается только одно окно"
 
 
 def test_too_many_procedures():

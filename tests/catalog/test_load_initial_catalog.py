@@ -79,7 +79,13 @@ def test_equipment_and_other_procedures(loaded):
 
     individual = Procedure.objects.get(kind=ProcedureKind.INDIVIDUAL)
     assert (individual.card_label, individual.default_duration_min) == ("Инд.занятие", 30)
-    assert Procedure.objects.filter(kind=ProcedureKind.CARD_ONLY).count() == 11
+    card_only = set(
+        Procedure.objects.filter(kind=ProcedureKind.CARD_ONLY).values_list("name", flat=True)
+    )
+    assert len(card_only) == 15
+    # Физиотерапия из листов назначений — строка в карте (TZ.md, решение 71).
+    assert {"Меркурий", "Диамаг", "ЧЭНС", "Пневмокомпрессия"} <= card_only
+    assert "Индивид. ЛФК" in individual.synonyms
     evening = Procedure.objects.filter(evening_individual=True)
     assert set(evening.values_list("name", flat=True)) == {"Мото-Л", "Артромот"}
 

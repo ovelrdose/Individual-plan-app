@@ -66,3 +66,63 @@ def _match_pool(key: str, procedures: list[ProcedureRef]) -> ProcedureRef | None
         (p for p in pools if not any(group in normalize_name(p.name) for group in POOL_GROUPS)),
         None,
     )
+
+
+# Опечатка — одна буква (решение 71). Короткие названия (ТБС, ШОП, Pablo) — только точно:
+# в них одна буква уже меняет смысл.
+TYPO_MIN_LENGTH = 6
+
+
+@dataclass(frozen=True)
+class Match:
+    procedure: ProcedureRef | None
+    typo: bool = False  # распознано с опечаткой — врачу показывается предупреждение
+
+
+def match_with_typos(
+    text: str, procedures: list[ProcedureRef], *, kinds: tuple[str, ...] | None = None
+) -> Match:
+    """Как ``match_procedure``, а если ничего не нашлось — синоним с опечаткой в одну букву
+    («логпеда» → «логопед»). Группы ДС так не ищутся: их названия — части тела."""
+    found = match_procedure(text, procedures, kinds=kinds)
+    if found is not None:
+        return Match(found)
+    key = normalize_name(text)
+    best, best_length = None, 0
+    for procedure in procedures:
+        if procedure.kind in FALLBACK_KINDS or (kinds is not None and procedure.kind not in kinds):
+            continue
+        for synonym in procedure.match_keys():
+            long_enough = len(synonym) >= TYPO_MIN_LENGTH and len(synonym) > best_length
+            if long_enough and _contains_near(key, synonym):
+                best, best_length = procedure, len(synonym)
+    return Match(best, typo=True) if best else Match(None)
+
+
+def _contains_near(text: str, word: str) -> bool:
+    """В ``text`` есть кусок, отличающийся от ``word`` не больше чем на одну букву."""
+    for size in (len(word) - 1, len(word), len(word) + 1):
+        for start in range(0, len(text) - size + 1):
+            if _distance_at_most_one(text[start : start + size], word):
+                return True
+    return False
+
+
+def _distance_at_most_one(a: str, b: str) -> bool:
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    i = j = edits = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(a) == len(b):
+            i += 1
+        j += 1
+    return edits + (len(b) - j) <= 1

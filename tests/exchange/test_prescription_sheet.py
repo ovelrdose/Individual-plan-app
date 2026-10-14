@@ -430,3 +430,72 @@ class TestTableVariants:
         )
 
         assert sheet.start_date == date(2026, 10, 5)
+
+
+# --- Листы разных врачей (TZ.md, решение 71) ---------------------------------------------------
+
+
+def one_row(text: str):
+    (row,) = parse_sheet(make_sheet(rows=[("05.10.26", text, "")])).rows
+    return row
+
+
+class TestDoctorVariants:
+    @pytest.mark.parametrize(("room", "expected"), [("Палата 1", "1"), ("Палата 5а", "5а")])
+    def test_room_without_number_sign(self, room, expected):
+        header = f"ФИО  Тестова Анна Сергеевна     ИБ №7      ШРМ 4      Диагноз: I69      {room}"
+
+        assert parse_sheet(make_sheet(header=header)).room == expected
+
+    @pytest.mark.parametrize(
+        ("text", "per_day"),
+        [
+            ("Thera Trainer Tigo, по 15 минут 2 раза в день, е/д", 2),
+            ("Индивидуальное занятие ЛФК, 30 минут, 1 раз в день", 1),
+            ("Индивид.ЛФК 2р/день, ежедневно", 2),
+        ],
+    )
+    def test_frequency_wording(self, text, per_day):
+        assert one_row(text).per_day == per_day
+
+    def test_number_without_frequency(self):
+        row = one_row("Индивидуальное занятие ЛФК 30 мин №2")
+
+        assert (row.per_day, row.number) == (1, 2), "что значит №2 — решает импорт по процедуре"
+
+    @pytest.mark.parametrize(
+        "text",
+        ["Массаж н/к 15 мин 8:45 №       246 кабинет", "Имитрон №2 2 р/д"],
+    )
+    def test_cabinet_or_explicit_frequency_is_not_a_number(self, text):
+        assert one_row(text).number is None
+
+    def test_group_list_without_dashes_last_line_with_dosage(self):
+        text = (
+            "Групповые занятия ЛФК:\nЭрго общая\nСпина в 16:30 - 181 каб.\n"
+            "Колено в 15:00 – 179 каб.\nI can нога – 4р/день, ежедневно, по будням"
+        )
+
+        rows = parse_sheet(make_sheet(rows=[("07.10.26", text, "")])).rows
+
+        assert [(r.raw_text, r.per_day, r.at) for r in rows] == [
+            ("Групповые занятия ЛФК: Эрго общая", 1, ""),
+            ("Групповые занятия ЛФК: Спина в 16:30 - 181 каб.", 1, "16:30"),
+            ("Групповые занятия ЛФК: Колено в 15:00 – 179 каб.", 1, "15:00"),
+            ("Групповые занятия ЛФК: I can нога", 1, ""),
+        ]
+
+    def test_bulleted_list_keeps_dosage_line_as_separate_item(self):
+        """В списке с дефисами строка «название + дозировка» — отдельное назначение."""
+        text = "Групповые занятия ЛФК\n- Эрго общая\nИндивидуальное занятие ЛФК 30 мин 1 р/д"
+
+        rows = parse_sheet(make_sheet(rows=[("05.10.26", text, "")])).rows
+
+        assert [r.raw_text for r in rows] == [
+            "Групповые занятия ЛФК: Эрго общая",
+            "Индивидуальное занятие ЛФК 30 мин 1 р/д",
+        ]
+
+    @pytest.mark.parametrize(("text", "at"), [("Колено в 9:05", "09:05"), ("Колено 25:00", "")])
+    def test_time(self, text, at):
+        assert one_row(text).at == at

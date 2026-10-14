@@ -1,0 +1,5 @@
+{# Одинаковые колонки у таблиц действующих и отменённых назначений. #}
+<colgroup>
+  {% if can_edit %}<col style="width: 1.75rem">{% endif %}
+  <col style="width: 2.5rem"><col><col style="width: 4rem"><col style="width: 6.5rem"><col style="width: 11rem">
+</colgroup>

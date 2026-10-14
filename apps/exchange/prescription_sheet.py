@@ -35,6 +35,10 @@ class SheetRow:
     duration_min: int | None = None
     per_day: int = 1
     consultation: bool = False
+    # «Спина в 16:30»: врач указал время группы — подбор возьмёт занятие в это время.
+    at: str = ""
+    # «Индивидуальное занятие 30 мин №2» без «р/д»: для индивидуального — число занятий в день.
+    number: int | None = None
 
 
 @dataclass
@@ -86,7 +90,7 @@ HEADER_FIELDS = {
     "shrm": re.compile(r"ШРМ\s*(?P<v>[345])\b"),
     # «5а», «5 а», «9.» → «5а», «5а», «9». Палаты без номера («ВИП») — как написано.
     "room": re.compile(
-        r"Палата\s*№\s*(?:(?P<num>\d+)(?:\s?(?P<letter>[а-яёa-z])(?![а-яёa-z]))?|(?P<v>\S+))",
+        r"Палата\s*(?:№\s*)?(?:(?P<num>\d+)(?:\s?(?P<letter>[а-яёa-z])(?![а-яёa-z]))?|(?P<v>\S+))",
         re.IGNORECASE,
     ),
 }
@@ -104,14 +108,20 @@ REQUIRED = ("full_name", "shrm", "room")
 
 DATE = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{2,4})")
 DURATION = re.compile(r"(\d+)\s*мин", re.IGNORECASE)
-PER_DAY = re.compile(r"(\d+)\s*р/д", re.IGNORECASE)
+# «2 р/д», «2р/день», «2 раза в день» — врачи пишут по-разному.
+PER_DAY = re.compile(r"(\d+)\s*(?:р/д|раза?\s+в\s+день)", re.IGNORECASE)
 BULLET = re.compile(r"^\s*[-–—]\s*")
+AT_TIME = re.compile(r"(?<![\d:])(\d{1,2}):(\d{2})(?![\d:])")
+NUMBER = re.compile(r"№\s*(\d{1,2})(?!\d)")
 CONSULTATION = re.compile(r"^\s*консультац\w*[\s:]+", re.IGNORECASE)
 GROUP_TITLE = re.compile(r"^\s*групповые\s+занятия", re.IGNORECASE)
 POOL_TITLE = re.compile(r"бассейн|в\s+воде", re.IGNORECASE)
 # Что остаётся от строки «30 мин 2 р/д е/д, ежедневно» без дозировки — если ничего, это не
 # отдельное назначение, а дозировка для групп над ней.
-DOSAGE_WORDS = re.compile(r"\d+\s*мин\w*|\d+\s*р/д|е/д|ежедневно|[\s,.;]+", re.IGNORECASE)
+DOSAGE_WORDS = re.compile(
+    r"\d+\s*мин\w*|\d+\s*(?:р/д\w*|раза?\s+в\s+день)|е/д|ежедневно|по\s+будням|[\s,.;]+",
+    re.IGNORECASE,
+)
 CONSULTATION_SPLIT = re.compile(r",|;|\s+и\s+")
 HEADER_ROWS_TO_SCAN = 3
 MAX_DURATION_MIN = 240
@@ -285,6 +295,8 @@ def _physio_rows(
             cancel_date=cancel_date,
             duration_min=_duration(source, raw, warnings),
             per_day=per_day or _per_day(source, raw, warnings),
+            at=_at(match),
+            number=None if PER_DAY.search(source) else _int(NUMBER, source),
         )
 
     if not any(BULLET.match(line) or GROUP_TITLE.match(line) for line in lines):
@@ -299,7 +311,7 @@ def _physio_rows(
     # «2 р/д» под списком — сколько групповых занятий в день на весь список, т. е. каждая
     # группа идёт один раз (решение владельца 04.10, TZ.md решение 42).
     result: list[SheetRow] = []
-    title, groups, in_list = "", [], False
+    title, groups, in_list, bulleted = "", [], False, False
 
     def flush(dosage: str) -> None:
         total = _int(PER_DAY, dosage)
@@ -313,17 +325,17 @@ def _physio_rows(
         for group in groups:
             # «Бассейн / - верхняя конечность»: признак бассейна — в заголовке списка.
             match = f"{title} {group}" if POOL_TITLE.search(title) else group
-            raw = f"{title}: {group}" if title else group
+            raw = f"{title.rstrip(':')}: {group}" if title else group
             result.append(row(raw, match, f"{group} {dosage}", per_day=1))
         groups.clear()
 
     for line in lines:
         if BULLET.match(line):
             groups.append(BULLET.sub("", line))
-            in_list = True
+            in_list = bulleted = True
         elif GROUP_TITLE.match(line) or (POOL_TITLE.search(line) and not _has_dosage(line)):
             flush("")
-            title, in_list = line, True
+            title, in_list, bulleted = line, True, False
         elif _is_dosage_only(line):
             if groups:
                 flush(line)
@@ -334,12 +346,31 @@ def _physio_rows(
                 result.append(row(last.raw_text, last.match_text, f"{last.raw_text} {line}"))
         elif in_list and not _has_dosage(line):
             groups.append(line)
+        elif in_list and groups and not bulleted and _name_before_dosage(line):
+            # Список без дефисов: «I can нога – 4р/день, ежедневно» — последняя группа и
+            # дозировка всего списка. В списке с дефисами такая строка — отдельное назначение.
+            groups.append(_name_before_dosage(line))
+            flush(line)
+            in_list = False
         else:
             flush("")
             title, in_list = "", False
             result.append(row(line, line, line))
     flush("")
     return result
+
+
+def _name_before_dosage(line: str) -> str:
+    starts = [m.start() for m in (DURATION.search(line), PER_DAY.search(line)) if m]
+    return line[: min(starts)].rstrip(" –—-,:;") if starts else ""
+
+
+def _at(text: str) -> str:
+    """Время в строке назначения: «Спина в 16:30» → «16:30»."""
+    match = AT_TIME.search(text)
+    if not match or not (0 <= int(match[1]) <= 23 and 0 <= int(match[2]) <= 59):
+        return ""
+    return f"{int(match[1]):02d}:{match[2]}"
 
 
 def _is_dosage_only(line: str) -> bool:

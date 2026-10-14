@@ -143,8 +143,11 @@
   </div>
 
   <h2 class="h5">Назначения</h2>
-  <p class="text-body-secondary small">Порядок строк — порядок в карте (блок «Уважаемый пациент!»).</p>
-  {% include "programs/_prescriptions.html" %}
+  <p class="text-body-secondary small">Порядок строк — порядок в карте (блок «Уважаемый пациент!»).{% if can_edit %} Чтобы изменить или отменить назначение, нажмите на строку.{% endif %}</p>
+  <div class="row g-3 align-items-start">
+    <div class="col">{% include "programs/_prescriptions.html" %}</div>
+    {% include "programs/_prescription_panel.html" with form=None %}
+  </div>
 
   <div class="mt-4">{% include "scheduling/_schedule.html" %}</div>
   </div>

@@ -192,7 +192,15 @@ def delete_program(user: User, program: Program) -> None:
 # --- Назначения -----------------------------------------------------------------------
 
 
-EDITABLE_FIELDS = ["procedure", "duration_min", "per_day", "start_date", "cancel_date", "in_card"]
+EDITABLE_FIELDS = [
+    "procedure",
+    "duration_min",
+    "per_day",
+    "start_date",
+    "cancel_date",
+    "in_card",
+    "preferred_time",
+]
 
 
 @transaction.atomic
@@ -238,21 +246,51 @@ def delete_prescription(user: User, prescription: Prescription) -> None:
 
 @transaction.atomic
 def move_prescription(user: User, prescription: Prescription, step: int) -> None:
-    """Сдвигает строку на позицию вверх (step=-1) или вниз (step=1) в порядке карты."""
+    """Сдвигает строку на позицию вверх (step=-1) или вниз (step=1) среди действующих:
+    отменённые на экране свёрнуты, и шаг «через» невидимую строку выглядел бы как пустой."""
     program = _lock(prescription.program)
     require_editable(user, program)
     _require_exists(program, prescription)
-    items = list(program.prescriptions.all())
-    index = next(i for i, item in enumerate(items) if item.pk == prescription.pk)
-    target = index + step
-    if not 0 <= target < len(items):
+    today = board_days.today()
+    active = [item.pk for item in program.prescriptions.all() if not item.is_cancelled(today)]
+    if prescription.pk not in active:
         return
-    items[index], items[target] = items[target], items[index]
+    index = active.index(prescription.pk)
+    target = index + step
+    if not 0 <= target < len(active):
+        return
+    active[index], active[target] = active[target], active[index]
+    _reorder(user, program, active, today)
+
+
+@transaction.atomic
+def reorder_prescriptions(user: User, program: Program, order: list[int]) -> None:
+    """Новый порядок действующих строк (перетаскивание). Отменённые остаются на своих
+    местах в карте — меняются местами только действующие."""
+    program = _lock(program)
+    require_editable(user, program)
+    _reorder(user, program, order, board_days.today())
+
+
+def _reorder(user: User, program: Program, order: list[int], today: date) -> None:
+    items = list(program.prescriptions.all())
+    slots = [i for i, item in enumerate(items) if not item.is_cancelled(today)]
+    if sorted(order) != sorted(items[i].pk for i in slots):
+        raise ProgramsError("Список назначений изменился — обновите страницу.")
+    by_pk = {item.pk: item for item in items}
+    for slot, pk in zip(slots, order, strict=True):
+        items[slot] = by_pk[pk]
     # Перенумеровываем подряд: так порядок однозначен даже после удалений строк.
-    for order, item in enumerate(items, start=1):
-        if item.card_order != order:
-            item.card_order = order
+    for position, item in enumerate(items, start=1):
+        if item.card_order != position:
+            item.card_order = position
             _save(item, user, update_fields=["card_order"])
+
+
+def cancel_prescription(user: User, prescription: Prescription, day: date | None) -> None:
+    """Отмена с даты (первый день без процедуры) или, с day=None, возврат на весь курс."""
+    prescription.cancel_date = day
+    update_prescription(user, prescription)
 
 
 def require_editable(user: User, program: Program) -> None:

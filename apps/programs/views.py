@@ -1,7 +1,7 @@
-from datetime import date
+from datetime import date, timedelta
 
 from django.contrib import messages
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -263,27 +263,31 @@ def program_dismiss_warnings(request: HttpRequest, pk: int) -> HttpResponse:
     return redirect("programs:detail", pk=pk)
 
 
-# --- Назначения (HTMX: каждое действие возвращает обновлённую таблицу) --------------------
+# --- Назначения (HTMX) ----------------------------------------------------------------
+# Таблица только показывает строки; добавление и правка — в панели справа. Действие в панели
+# возвращает панель (цель запроса) и вне цели (hx-swap-oob) — таблицу и расписание.
 
 
-@require_POST
 def prescription_add(request: HttpRequest, pk: int) -> HttpResponse:
     program = services.get_program_or_404(request.user, pk)
-    form = PrescriptionForm(request.POST, instance=Prescription(program=program))
-    if form.is_valid():
+    if not _editable(request, program):
+        return _panel_response(request, program)
+    form = PrescriptionForm(request.POST or None, instance=Prescription(program=program))
+    if request.method == "POST" and form.is_valid():
         try:
             services.add_prescription(request.user, form.instance)
         except ProgramsError as error:
             form.add_error(None, str(error))
         else:
-            form = None
-    return _prescriptions_response(request, program, add_form=form)
+            return _panel_response(request, program, changed=True)
+    return _panel_response(request, program, form=form)
 
 
 def prescription_edit(request: HttpRequest, pk: int, prescription_pk: int) -> HttpResponse:
     program, prescription = _get_prescription(request, pk, prescription_pk)
-    services.require_editable(request.user, program)
-    # Префикс: на странице одновременно форма правки строки и форма добавления.
+    if not _editable(request, program):
+        return _panel_response(request, program)
+    # Префикс: поля правки не путаются с полями добавления в истории браузера и тестах.
     form = PrescriptionEditForm(request.POST or None, instance=prescription, prefix="edit")
     if request.method == "POST" and form.is_valid():
         try:
@@ -291,15 +295,31 @@ def prescription_edit(request: HttpRequest, pk: int, prescription_pk: int) -> Ht
         except ProgramsError as error:
             form.add_error(None, str(error))
         else:
-            return _prescriptions_response(request, program)
-    return _prescriptions_response(request, program, edit_form=form, editing=prescription)
+            return _panel_response(request, program, changed=True)
+    return _panel_response(request, program, form=form, editing=prescription)
 
 
 @require_POST
 def prescription_delete(request: HttpRequest, pk: int, prescription_pk: int) -> HttpResponse:
     program, prescription = _get_prescription(request, pk, prescription_pk)
     _run(request, services.delete_prescription, request.user, prescription)
-    return _prescriptions_response(request, program)
+    return _panel_response(request, program, changed=True)
+
+
+@require_POST
+def prescription_cancel(request: HttpRequest, pk: int, prescription_pk: int) -> HttpResponse:
+    """«Отменить с завтра» или «Вернуть на весь курс» — самые частые правки одной кнопкой."""
+    program, prescription = _get_prescription(request, pk, prescription_pk)
+    day = None if request.POST.get("restore") else board_days.today() + timedelta(days=1)
+    try:
+        services.cancel_prescription(request.user, prescription, day)
+    except ValidationError as error:
+        messages.error(request, " ".join(error.messages))
+    except ProgramsError as error:
+        messages.error(request, str(error))
+    prescription.refresh_from_db()
+    form = PrescriptionEditForm(instance=prescription, prefix="edit")
+    return _panel_response(request, program, form=form, editing=prescription, changed=True)
 
 
 @require_POST
@@ -311,7 +331,32 @@ def prescription_move(
     if step is None:
         raise Http404
     _run(request, services.move_prescription, request.user, prescription, step)
+    # Панель остаётся открытой: строку двигают несколько раз подряд.
+    prescription.refresh_from_db()
+    form = PrescriptionEditForm(instance=prescription, prefix="edit")
+    return _panel_response(request, program, form=form, editing=prescription, changed=True)
+
+
+@require_POST
+def prescription_reorder(request: HttpRequest, pk: int) -> HttpResponse:
+    """Порядок строк после перетаскивания: id действующих назначений сверху вниз."""
+    program = services.get_program_or_404(request.user, pk)
+    try:
+        order = [int(value) for value in request.POST.getlist("order")]
+    except ValueError as error:
+        raise Http404 from error
+    _run(request, services.reorder_prescriptions, request.user, program, order)
     return _prescriptions_response(request, program)
+
+
+def _editable(request: HttpRequest, program: Program) -> bool:
+    """Чужая роль — 403; выбывший пациент — сообщение вместо панели."""
+    try:
+        services.require_editable(request.user, program)
+    except ProgramsError as error:
+        messages.error(request, str(error))
+        return False
+    return True
 
 
 def _get_prescription(
@@ -333,30 +378,59 @@ def _run(request: HttpRequest, action, *args) -> None:
         messages.error(request, str(error))
 
 
-def _prescriptions_context(request, program, *, add_form=None, edit_form=None, editing=None):
-    can_edit = services.can_edit(request.user, program)
-    if add_form is None and can_edit:
-        add_form = PrescriptionForm(instance=Prescription(program=program))
+def _prescriptions_context(request, program, *, selected=None, oob=False) -> dict:
+    """Действующие строки — сверху в порядке карты, отменённые (FR-PRG-3) — свёрнуты внизу."""
+    today = board_days.today()
+    items = list(program.prescriptions.select_related("procedure"))
     return {
         "program": program,
-        "prescriptions": program.prescriptions.select_related("procedure"),
-        "can_edit": can_edit,
-        "add_form": add_form,
-        "edit_form": edit_form,
-        "editing": editing,
+        "active": [item for item in items if not item.is_cancelled(today)],
+        "cancelled": [item for item in items if item.is_cancelled(today)],
+        "can_edit": services.can_edit(request.user, program),
+        "selected": selected,
+        "oob": oob,
     }
 
 
-def _prescriptions_response(request, program, **kwargs) -> HttpResponse:
+def _prescriptions_response(request, program) -> HttpResponse:
     """Таблица назначений и — вне основной цели HTMX (hx-swap-oob) — блок расписания:
     изменение назначения сразу пересобирает расписание, экран должен это показать."""
     program.refresh_from_db()
     table = render_to_string(
-        "programs/_prescriptions.html",
-        _prescriptions_context(request, program, **kwargs),
+        "programs/_prescriptions.html", _prescriptions_context(request, program), request=request
+    )
+    return HttpResponse(table + _schedule_oob(request, program))
+
+
+def _panel_response(
+    request, program, *, form=None, editing=None, changed: bool = False
+) -> HttpResponse:
+    """Панель (пустая — закрыта) и таблица с выделенной строкой; после изменения —
+    ещё и расписание."""
+    program.refresh_from_db()
+    panel = render_to_string(
+        "programs/_prescription_panel.html",
+        {
+            "program": program,
+            "form": form,
+            "editing": editing,
+            "tomorrow": board_days.today() + timedelta(days=1),
+            "today": board_days.today(),
+        },
         request=request,
     )
-    schedule = render_to_string(
+    table = render_to_string(
+        "programs/_prescriptions.html",
+        _prescriptions_context(
+            request, program, selected=editing.pk if editing else None, oob=True
+        ),
+        request=request,
+    )
+    return HttpResponse(panel + table + (_schedule_oob(request, program) if changed else ""))
+
+
+def _schedule_oob(request, program) -> str:
+    return render_to_string(
         "scheduling/_schedule.html",
         {
             "program": program,
@@ -366,4 +440,3 @@ def _prescriptions_response(request, program, **kwargs) -> HttpResponse:
         },
         request=request,
     )
-    return HttpResponse(table + schedule)

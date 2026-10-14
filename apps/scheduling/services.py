@@ -266,10 +266,11 @@ def _need(
     if group_required and prescription.pool_group is not None:
         # Занятия встают во время группы, которую выбрал специалист ФР.
         procedure, group_required = prescription.pool_group, False
-    sessions = tuple(
-        Session(s.pk, _minutes(s.start_time), _minutes(s.end_time))
-        for s in procedure.sessions.filter(is_active=True)
-    )
+    active = procedure.sessions.filter(is_active=True)
+    if prescription.preferred_time and active.filter(start_time=prescription.preferred_time):
+        # Врач указал время группы в листе — подбор берёт только это занятие (решение 71).
+        active = active.filter(start_time=prescription.preferred_time)
+    sessions = tuple(Session(s.pk, _minutes(s.start_time), _minutes(s.end_time)) for s in active)
     return Need(
         prescription_id=prescription.pk,
         procedure_id=procedure.pk,

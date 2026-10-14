@@ -1,0 +1,107 @@
+{# Панель справа от таблицы назначений: добавление (editing пуст) или правка строки. #}
+{# Без формы — закрыта. Кнопки внизу — частые действия без открытия полей. #}
+{% if form %}
+<div id="prescription-panel" class="col-12 col-xl-4 prescription-panel">
+  <div class="card shadow-sm">
+    <div class="card-header d-flex align-items-center gap-2">
+      <strong class="text-truncate">{% if editing %}{{ editing.label }}{% else %}Новое назначение{% endif %}</strong>
+      <button type="button" class="btn-close ms-auto" data-panel-close aria-label="Закрыть"></button>
+    </div>
+    <div class="card-body">
+      {% if editing.raw_text %}
+        <div class="small bg-body-tertiary rounded p-2 mb-3"><span class="text-body-secondary">Из листа:</span> {{ editing.raw_text }}</div>
+      {% endif %}
+
+      <form hx-post="{% if editing %}{% url 'programs:prescription_edit' program.pk editing.pk %}{% else %}{% url 'programs:prescription_add' program.pk %}{% endif %}"
+            hx-target="#prescription-panel" hx-swap="outerHTML"
+            x-data="{ id: '{{ form.procedure_id|escapejs }}', label: '{{ form.procedure_label|escapejs }}', open: false, original: '{{ editing.procedure_id|default_if_none:''|escapejs }}' }">
+        {% for error in form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}
+
+        <div class="mb-3 position-relative">
+          <label class="form-label" for="procedure-search">Процедура <span class="text-danger">*</span></label>
+          <input type="hidden" name="{{ form.procedure.html_name }}" :value="id">
+          <div x-show="id && label" class="input-group">
+            <span class="form-control bg-success-subtle" x-text="label"></span>
+            <button type="button" class="btn btn-outline-secondary" title="Выбрать другую"
+                    @click="id = ''; label = ''; $nextTick(() => $refs.search.focus())"><i class="bi bi-x-lg"></i></button>
+          </div>
+          <input type="search" id="procedure-search" name="q" class="form-control" x-ref="search"
+                 x-show="!(id && label)" placeholder="Название или синоним, например «st150»" autocomplete="off"
+                 {% if not form.procedure_id %}autofocus{% endif %}
+                 hx-get="{% url 'catalog:procedure_search' %}?department={{ program.department_id }}"
+                 hx-trigger="input changed delay:250ms, focus" hx-target="#procedure-results" @focus="open = true">
+          <div id="procedure-results" class="list-group position-absolute w-100 shadow-sm" style="z-index: 10"
+               x-show="open && !(id && label)" @click.outside="open = false"></div>
+          {% for error in form.procedure.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+        </div>
+
+        <div class="row g-2 mb-3">
+          <div class="col-5">{% include "includes/form_field.html" with field=form.duration_min wrapper_class="mb-0" %}</div>
+          <div class="col-7">
+            <label class="form-label" for="{{ form.per_day.id_for_label }}">{{ form.per_day.label }}</label>
+            <div class="input-group">
+              <button type="button" class="btn btn-outline-secondary" title="Меньше" @click="$refs.perDay.stepDown()"><i class="bi bi-dash-lg"></i></button>
+              {{ form.per_day }}
+              <button type="button" class="btn btn-outline-secondary" title="Больше" @click="$refs.perDay.stepUp()"><i class="bi bi-plus-lg"></i></button>
+            </div>
+            {% for error in form.per_day.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+          </div>
+        </div>
+
+        {% if editing and form.session_times %}
+          {# Сменили процедуру — у прежней группы другие занятия: время не отправляется и сбрасывается. #}
+          <div class="mb-3" x-show="id == original">
+            {% include "includes/form_field.html" with field=form.preferred_time wrapper_class="mb-0" %}
+          </div>
+        {% elif editing %}
+          {% for error in form.preferred_time.errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}
+        {% endif %}
+
+        <div class="row g-2 mb-3">
+          <div class="col-6">{% include "includes/form_field.html" with field=form.start_date wrapper_class="mb-0" %}</div>
+          <div class="col-6">{% include "includes/form_field.html" with field=form.cancel_date wrapper_class="mb-0" %}</div>
+          <div class="col-12 form-text mt-1">Пусто — с начала / до конца курса. «Отменено с» — первый день без процедуры.</div>
+        </div>
+
+        {% include "includes/form_field.html" with field=form.in_card %}
+
+        <button type="submit" class="btn btn-success">{% if editing %}Сохранить{% else %}Добавить{% endif %}</button>
+        <button type="button" class="btn btn-link" data-panel-close>Отмена</button>
+      </form>
+
+      {% if editing %}
+        <hr>
+        <div class="d-flex flex-wrap gap-2">
+          {% if editing.cancel_date %}
+            <button class="btn btn-sm btn-outline-primary" hx-post="{% url 'programs:prescription_cancel' program.pk editing.pk %}"
+                    hx-vals='{"restore": "1"}' hx-target="#prescription-panel" hx-swap="outerHTML">
+              <i class="bi bi-arrow-counterclockwise"></i> Снять отмену
+            </button>
+          {% elif tomorrow > editing.effective_start and tomorrow <= program.end_date %}
+            <button class="btn btn-sm btn-outline-warning" hx-post="{% url 'programs:prescription_cancel' program.pk editing.pk %}"
+                    hx-target="#prescription-panel" hx-swap="outerHTML"
+                    hx-confirm="Отменить «{{ editing.label }}» с завтра ({{ tomorrow|date:'d.m' }})? Сегодня процедура ещё проводится.">
+              <i class="bi bi-x-circle"></i> Отменить с завтра
+            </button>
+          {% endif %}
+          {% if not editing.cancel_date or editing.cancel_date > today %}
+            <div class="btn-group btn-group-sm" role="group" aria-label="Порядок в карте">
+              <button class="btn btn-outline-secondary" title="Выше в карте"
+                      hx-post="{% url 'programs:prescription_move' program.pk editing.pk 'up' %}" hx-target="#prescription-panel" hx-swap="outerHTML"><i class="bi bi-arrow-up"></i></button>
+              <button class="btn btn-outline-secondary" title="Ниже в карте"
+                      hx-post="{% url 'programs:prescription_move' program.pk editing.pk 'down' %}" hx-target="#prescription-panel" hx-swap="outerHTML"><i class="bi bi-arrow-down"></i></button>
+            </div>
+          {% endif %}
+          <button class="btn btn-sm btn-outline-danger ms-auto" title="Удалить строку целиком, со всеми занятиями"
+                  hx-post="{% url 'programs:prescription_delete' program.pk editing.pk %}" hx-target="#prescription-panel" hx-swap="outerHTML"
+                  hx-confirm="Удалить назначение «{{ editing.label }}»? Строка пропадёт из карты, занятия — из расписания. Если процедуру просто больше не проводят — лучше «Отменить с завтра».">
+            <i class="bi bi-trash"></i> Удалить
+          </button>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% else %}
+<div id="prescription-panel" class="d-none"></div>
+{% endif %}

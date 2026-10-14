@@ -3,6 +3,7 @@
 Оформление шаблона не трогаем: пишем только значения, форматы чисел и серую заливку.
 """
 
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
-from .data import CardData
+from .data import CardData, ScheduleItem
 from .formatting import sex_age_text
 from .mapping import CardMapping
 
@@ -24,6 +25,7 @@ class CardRenderError(ValueError):
 
 
 def render_card(template_path: Path, mapping: CardMapping, data: CardData) -> bytes:
+    data = replace(data, schedule=fit_schedule(data.schedule, len(mapping.schedule.rows)))
     _check_fits(mapping, data)
 
     workbook = load_workbook(template_path)
@@ -35,6 +37,18 @@ def render_card(template_path: Path, mapping: CardMapping, data: CardData) -> by
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def fit_schedule(items: tuple[ScheduleItem, ...], capacity: int) -> tuple[ScheduleItem, ...]:
+    """Вечернее индивидуальное (Мото-Л, 18:00) — одиннадцатая строка к десяти дневным слотам.
+    Чтобы оно попало в карту, убираем самые поздние пустые окна (TZ.md, решение 71)."""
+    rows = list(items)
+    while len(rows) > capacity:
+        empty = [index for index, item in enumerate(rows) if not item.label]
+        if not empty:
+            break
+        rows.pop(empty[-1])
+    return tuple(rows)
 
 
 def _check_fits(mapping: CardMapping, data: CardData) -> None:

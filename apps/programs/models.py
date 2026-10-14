@@ -258,6 +258,13 @@ class Prescription(models.Model):
         verbose_name="группа бассейна",
         help_text="Для назначения «Бассейн» без группы; выбирает специалист ФР.",
     )
+    # «Спина в 16:30» в листе: подбор берёт занятие группы в это время (TZ.md, решение 71).
+    preferred_time = models.TimeField(
+        "время группы",
+        null=True,
+        blank=True,
+        help_text="Если врач указал время: занятие группы ставится в это время.",
+    )
     card_order = models.PositiveIntegerField("порядок в карте", default=0)
 
     history = HistoricalRecords()
@@ -278,6 +285,10 @@ class Prescription(models.Model):
     def effective_start(self) -> date:
         return self.start_date or self.program.start_date
 
+    def is_cancelled(self, day: date) -> bool:
+        """В этот день процедура уже не проводится."""
+        return self.cancel_date is not None and self.cancel_date <= day
+
     def clean(self) -> None:
         program = self.program
         errors = {}
@@ -297,5 +308,9 @@ class Prescription(models.Model):
                 "Индивидуальных занятий в день — не больше "
                 f"{program.department.max_individual_per_day}."
             )
+        if self.preferred_time:
+            sessions = self.procedure.sessions.filter(is_active=True) if self.procedure else None
+            if not sessions or not sessions.filter(start_time=self.preferred_time).exists():
+                errors["preferred_time"] = "У этой группы нет занятия в это время."
         if errors:
             raise ValidationError(errors)

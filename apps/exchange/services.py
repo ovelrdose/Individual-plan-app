@@ -1,8 +1,8 @@
 """Импорт листа назначений в программу (TZ.md §6.3) и обновление программы из новой версии
 листа (FR-IMP-15)."""
 
-from dataclasses import dataclass
-from datetime import date, timedelta
+from dataclasses import dataclass, replace
+from datetime import date, time, timedelta
 from enum import StrEnum
 
 from django.core.exceptions import ValidationError
@@ -11,7 +11,7 @@ from django.db.models import Exists, OuterRef
 
 from apps.accounts.access import require_role
 from apps.accounts.models import Role, User
-from apps.catalog.models import Procedure, ProcedureKind
+from apps.catalog.models import SESSION_KINDS, Procedure, ProcedureKind
 from apps.catalog.services import visible_procedures
 from apps.org.models import Department
 from apps.programs.domain import course_end, patient_key, sex_from_name
@@ -27,7 +27,7 @@ from apps.programs.services import (
 from apps.scheduling import board_days
 from apps.scheduling.services import replan
 
-from .matching import ProcedureRef, match_procedure
+from .matching import ProcedureRef, match_with_typos
 from .prescription_sheet import Sheet, SheetRow
 
 MAX_FILE_SIZE = 5 * 1024 * 1024
@@ -201,21 +201,39 @@ def import_prescription_sheet(
     return program
 
 
-def _matched_rows(department: Department, sheet: Sheet) -> list[tuple]:
-    """Строки листа, которые станут назначениями: строка, процедура (или None), длительность."""
+def _matched_rows(
+    department: Department, sheet: Sheet, warnings: list[str] | None = None
+) -> list[tuple]:
+    """Строки листа, которые станут назначениями: строка, процедура (или None), длительность.
+
+    Процедура «только строка в карте» встречается в карте один раз: «Индивид. психолог» и
+    «Консультация психолога» — одна строка «Психолог» (решение 71). Опечатка в одну букву
+    прощается, но врач получает предупреждение в ``warnings``.
+    """
     procedures = {p.pk: p for p in visible_procedures(department)}
     refs = [ProcedureRef(p.pk, p.name, p.kind, tuple(p.synonyms)) for p in procedures.values()]
     result: list[tuple] = []
+    card_only: set[int] = set()
     for row in sheet.rows:
-        if row.consultation:
-            # Консультации — только те, что есть в карте (психолог, логопед, эрготерапевт);
-            # «терапевт» и прочие пропускаем молча (FR-IMP-5).
-            ref = match_procedure(row.match_text, refs, kinds=(ProcedureKind.CARD_ONLY,))
-            if ref is None:
+        # Консультации — только те, что есть в карте (психолог, логопед, эрготерапевт);
+        # «терапевт» и прочие пропускаем молча (FR-IMP-5).
+        kinds = (ProcedureKind.CARD_ONLY,) if row.consultation else None
+        found = match_with_typos(row.match_text, refs, kinds=kinds)
+        if found.procedure is None and row.consultation:
+            continue
+        procedure: Procedure | None = procedures[found.procedure.id] if found.procedure else None
+        if procedure and procedure.kind == ProcedureKind.CARD_ONLY:
+            if procedure.pk in card_only:
                 continue
-        else:
-            ref = match_procedure(row.match_text, refs)
-        procedure: Procedure | None = procedures[ref.id] if ref else None
+            card_only.add(procedure.pk)
+        if found.typo and procedure and warnings is not None:
+            warnings.append(
+                f"«{row.raw_text}» распознано как «{procedure.name}» — похоже на опечатку, "
+                "проверьте."
+            )
+        if procedure and procedure.kind == ProcedureKind.INDIVIDUAL and row.number:
+            # «Индивидуальное занятие 30 мин №2» — два занятия в день (решение 71).
+            row = replace(row, per_day=row.number)
         duration = row.duration_min or (procedure.default_duration_min if procedure else None)
         result.append((row, procedure, duration))
     return result
@@ -224,7 +242,7 @@ def _matched_rows(department: Department, sheet: Sheet) -> list[tuple]:
 def _create_prescriptions(user: User, program: Program, sheet: Sheet) -> list[str]:
     warnings = []
     for order, (row, procedure, duration) in enumerate(
-        _matched_rows(program.department, sheet), start=1
+        _matched_rows(program.department, sheet, warnings), start=1
     ):
         prescription = Prescription(program=program, procedure=procedure)
         warnings += _fill_from_row(prescription, row, duration, order)
@@ -247,7 +265,26 @@ def _fill_from_row(
     prescription.cancel_date = row.cancel_date
     prescription.in_card = not (procedure and procedure.evening_individual)
     prescription.card_order = order
-    return _fit_into_course(prescription)
+    return _preferred_time(prescription, row) + _fit_into_course(prescription)
+
+
+def _preferred_time(prescription: Prescription, row: SheetRow) -> list[str]:
+    """«Спина в 16:30»: время из листа важнее подбора, если у группы есть занятие в это время;
+    иначе — предупреждение, время подбирается само (решение 71)."""
+    prescription.preferred_time = None
+    procedure = prescription.procedure
+    if not row.at or procedure is None or procedure.kind not in SESSION_KINDS:
+        return []
+    at = time.fromisoformat(row.at)
+    starts = sorted(s.start_time for s in procedure.sessions.filter(is_active=True))
+    if at in starts:
+        prescription.preferred_time = at
+        return []
+    known = ", ".join(f"{t:%H:%M}" for t in starts) or "нет занятий"
+    return [
+        f"«{row.raw_text}»: у «{procedure.name}» нет занятия в {row.at} (есть: {known}) — "
+        "время подберётся само. Проверьте назначение."
+    ]
 
 
 def _fit_into_course(prescription: Prescription) -> list[str]:
@@ -431,7 +468,7 @@ def _merge(
     )
     for item in existing:
         item.program = program  # проверки дат — по новому курсу
-    rows = _matched_rows(program.department, sheet)
+    rows = _matched_rows(program.department, sheet, warnings)
     pairs = _pair_rows(rows, existing)
 
     lines: list[UpdateLine] = []
@@ -503,6 +540,8 @@ def _describe(item: Prescription) -> str:
         parts.append(f"с {item.start_date:%d.%m}")
     if item.cancel_date:
         parts.append(f"отмена {item.cancel_date:%d.%m}")
+    if item.preferred_time:
+        parts.append(f"в {item.preferred_time:%H:%M}")
     if not item.in_card:
         parts.append("не в карте")
     return ", ".join(parts)

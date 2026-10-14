@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, time
 
 import pytest
 from django.core.exceptions import PermissionDenied
@@ -783,3 +783,64 @@ class TestPendingSheets:
 
         assert "врачом этого отделения" in response.content.decode()
         assert Program.objects.count() == 1
+
+
+class TestDoctorVariantsOnImport:
+    """Листы разных врачей (TZ.md, решение 71)."""
+
+    def test_new_card_only_procedures(self, doctor, department):
+        rows = [
+            ("05.10.26", "Меркурий ( э/с) на предплечья, 10 минут, е/д.", ""),
+            ("05.10.26", "Диамаг на оголовье 20 мин 1 р/д е/д.", ""),
+            ("05.10.26", "ЧЭНС поясничного отдела, 1р/день, 10 мин.", ""),
+            ("05.10.26", "Пневмокомпрессия верхних конечностей 30 минут", ""),
+        ]
+
+        program = do_import(doctor, department, rows=rows)
+
+        assert labels(program) == ["Меркурий", "Диамаг", "ЧЭНС", "Пневмокомпрессия"]
+        assert not program.prescriptions.filter(procedure=None).exists()
+
+    def test_card_only_procedure_is_one_card_row(self, doctor, department):
+        program = do_import(
+            doctor,
+            department,
+            rows=[("05.10.26", "Индивид.психолог 30 мин 1 р/д по будням", "")],
+            diagnostics=["Консультация медицинского психолога, логопеда"],
+        )
+
+        assert labels(program) == ["Психолог", "Логопед"]
+        assert program.prescriptions.get(procedure__name="Психолог").raw_text.startswith(
+            "Индивид.психолог"
+        )
+
+    def test_number_is_frequency_only_for_individual(self, doctor, department):
+        program = do_import(
+            doctor,
+            department,
+            rows=[
+                ("05.10.26", "Индивидуальное занятие ЛФК 30 мин №2", ""),
+                ("05.10.26", "Имитрон 15 мин №2", ""),
+            ],
+        )
+
+        per_day = dict(program.prescriptions.values_list("procedure__name", "per_day"))
+        assert per_day == {"Индивидуальное занятие": 2, "Имитрон": 1}
+
+    def test_group_time_from_sheet(self, doctor, department):
+        text = "Групповые занятия ЛФК:\nКолено в 15:00 – 179 каб.\nСпина в 16:30\n30 мин 2 р/д"
+
+        program = do_import(doctor, department, rows=[("05.10.26", text, "")])
+
+        knee = program.prescriptions.get(procedure__name="ДС: коленный сустав")
+        back = program.prescriptions.get(procedure__name="ДС: спина")
+        assert knee.preferred_time == time(15, 0)
+        assert set(knee.bookings.values_list("start", flat=True)) == {time(15, 0)}
+        assert back.preferred_time is None
+        assert any("нет занятия в 16:30" in w for w in program.import_warnings)
+
+    def test_typo_is_recognized_with_warning(self, doctor, department):
+        program = do_import(doctor, department, diagnostics=["Консультация медицинского логпеда"])
+
+        assert "Логопед" in labels(program)
+        assert any("похоже на опечатку" in w for w in program.import_warnings)

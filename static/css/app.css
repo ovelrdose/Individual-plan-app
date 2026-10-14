@@ -80,3 +80,11 @@ body {
   border-radius: .375rem; background: var(--bs-dark); color: var(--bs-light); font-size: .875rem;
   opacity: 0; transition: opacity .3s; pointer-events: none; }
 .live-notice.show { opacity: .9; }
+
+/* Назначения на странице программы: таблица и панель правки справа. */
+.prescription-table { table-layout: fixed; }
+.prescription-row { cursor: pointer; }
+.prescription-table td { overflow-wrap: anywhere; }
+[data-drag-handle] { cursor: grab; }
+.prescription-row.dragging { opacity: .4; }
+.prescription-panel { position: sticky; top: 1rem; }

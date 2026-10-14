@@ -29,4 +29,12 @@ urlpatterns = [
         views.prescription_move,
         name="prescription_move",
     ),
+    path(
+        "<int:pk>/prescriptions/<int:prescription_pk>/cancel/",
+        views.prescription_cancel,
+        name="prescription_cancel",
+    ),
+    path(
+        "<int:pk>/prescriptions/reorder/", views.prescription_reorder, name="prescription_reorder"
+    ),
 ]

@@ -18,6 +18,7 @@
   <script src="{% static 'vendor/alpinejs/alpine.min.js' %}" defer></script>
   <script src="{% asset 'js/live.js' %}" defer></script>
   <script src="{% asset 'js/board.js' %}" defer></script>
+  <script src="{% asset 'js/prescriptions.js' %}" defer></script>
 </head>
 {# hx-boost: переходы и формы без перезагрузки страницы (NFR-11); файлы и админка — обычные ссылки. #}
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}' hx-boost="true" data-live-url="{% url 'live_events' %}">

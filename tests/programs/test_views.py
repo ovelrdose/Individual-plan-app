@@ -1,11 +1,14 @@
-from datetime import date
+from datetime import date, time
 
 import pytest
 from django.urls import reverse
 
 from apps.accounts.models import Role
 from apps.cards.models import CardExport
-from apps.programs.models import Prescription, Program
+from apps.catalog.models import GroupSession
+from apps.programs import services as programs_services
+from apps.programs.models import Prescription, Program, WithdrawalReason
+from apps.scheduling import board_days
 from apps.scheduling.models import Booking
 
 
@@ -131,7 +134,9 @@ class TestProgramScreens:
 
         detail = client.get(reverse("programs:detail", args=[program.pk]))
         assert detail.status_code == 200
-        assert detail.context["add_form"] is None
+        assert detail.context["can_edit"] is False
+        page = detail.content.decode()
+        assert reverse("programs:prescription_add", args=[program.pk]) not in page
         assert client.get(reverse("programs:create")).status_code == 403
         assert client.get(reverse("programs:edit", args=[program.pk])).status_code == 403
         assert (
@@ -152,15 +157,18 @@ class TestPrescriptionScreens:
         client.force_login(doctor)
         url = reverse("programs:prescription_add", args=[program.pk])
 
+        assert "Новое назначение" in client.get(url).content.decode()
         ok = client.post(
             url, {"procedure": procedures["group"].pk, "per_day": "1", "in_card": "on"}
         )
         empty = client.post(url, {"per_day": "1"})
         over = client.post(url, {"procedure": procedures["individual"].pk, "per_day": "3"})
 
-        assert '<div id="prescriptions">' in ok.content.decode()
+        # Добавили — панель закрывается, таблица и расписание приходят вне цели (hx-swap-oob).
+        assert '<div id="prescription-panel" class="d-none">' in ok.content.decode()
+        assert '<div id="prescriptions" hx-swap-oob="true">' in ok.content.decode()
         assert "Выберите процедуру из списка." in empty.content.decode()
-        assert over.context["add_form"].procedure_label == "Индивидуальное занятие"
+        assert over.context["form"].procedure_label == "Индивидуальное занятие"
         assert program.prescriptions.count() == 1
 
     def test_unrecognized_row_flow(self, client, doctor, make_program, procedures):
@@ -176,7 +184,7 @@ class TestPrescriptionScreens:
         )
 
         assert "Выбрать процедуру" in detail
-        assert "Из листа: Thera Trainer 15 мин" in form_page.content.decode()
+        assert "Из листа:</span> Thera Trainer 15 мин" in form_page.content.decode()
         assert saved.context["editing"] is None
         assert Prescription.objects.get(pk=item.pk).procedure == procedures["card_only"]
 
@@ -189,7 +197,153 @@ class TestPrescriptionScreens:
             reverse("programs:prescription_edit", args=[program.pk, item.pk]), {"edit-per_day": "1"}
         )
 
-        assert "procedure" in response.context["edit_form"].errors
+        assert "procedure" in response.context["form"].errors
+
+    def test_group_time(self, client, doctor, make_program, procedures):
+        """Время группы из листа правится в назначении; подбор ставит занятие в это время,
+        времени без занятия группы быть не может (TZ.md, решение 71)."""
+        group = procedures["group"]
+        for start in (time(9, 10), time(13, 40)):
+            GroupSession.objects.create(procedure=group, start_time=start, duration_min=30)
+        program = make_program()
+        item = Prescription.objects.create(program=program, procedure=group)
+        client.force_login(doctor)
+        url = reverse("programs:prescription_edit", args=[program.pk, item.pk])
+        data = {"edit-procedure": group.pk, "edit-per_day": "1", "edit-in_card": "on"}
+
+        wrong = client.post(url, data | {"edit-preferred_time": "11:00"})
+        client.post(url, data | {"edit-preferred_time": "13:40"})
+
+        assert "нет занятия в это время" in wrong.content.decode()
+        item.refresh_from_db()
+        assert item.preferred_time == time(13, 40)
+        assert set(item.bookings.values_list("start", flat=True)) == {time(13, 40)}
+        page = client.get(reverse("programs:detail", args=[program.pk])).content.decode()
+        assert "в 13:40" in page
+
+    def test_group_time_choices(self, client, doctor, make_program, procedures):
+        """Время группы выбирается из её занятий, а не вводится вручную."""
+        group = procedures["group"]
+        for start in (time(9, 10), time(13, 40)):
+            GroupSession.objects.create(procedure=group, start_time=start, duration_min=30)
+        program = make_program()
+        item = Prescription.objects.create(program=program, procedure=group)
+        card = Prescription.objects.create(program=program, procedure=procedures["card_only"])
+        client.force_login(doctor)
+
+        group_panel = client.get(reverse("programs:prescription_edit", args=[program.pk, item.pk]))
+        card_panel = client.get(reverse("programs:prescription_edit", args=[program.pk, card.pk]))
+
+        assert group_panel.context["form"].session_times == [time(9, 10), time(13, 40)]
+        assert '<option value="13:40:00">13:40</option>' in group_panel.content.decode()
+        assert "Время группы" not in card_panel.content.decode()
+
+    def test_table_and_panel(self, client, doctor, make_program, procedures, monkeypatch):
+        """Действующие — в таблице, отменённые — свёрнуты внизу; открытая строка выделена."""
+        monkeypatch.setattr(board_days, "today", lambda: date(2026, 10, 8))
+        program = make_program()
+        active = Prescription.objects.create(
+            program=program, procedure=procedures["card_only"], card_order=1
+        )
+        Prescription.objects.create(
+            program=program,
+            procedure=procedures["group"],
+            cancel_date=date(2026, 10, 8),
+            card_order=2,
+        )
+        client.force_login(doctor)
+
+        detail = client.get(reverse("programs:detail", args=[program.pk]))
+        panel = client.get(reverse("programs:prescription_edit", args=[program.pk, active.pk]))
+
+        assert [p.pk for p in detail.context["active"]] == [active.pk]
+        assert [p.label for p in detail.context["cancelled"]] == ["Эрго общая"]
+        assert "Отменённые (1)" in detail.content.decode()
+        assert panel.context["selected"] == active.pk
+        assert "table-active" in panel.content.decode()
+        assert "Отменить с завтра" in panel.content.decode()
+
+    def test_cancel_from_tomorrow_and_restore(
+        self, client, doctor, make_program, procedures, monkeypatch
+    ):
+        monkeypatch.setattr(board_days, "today", lambda: date(2026, 10, 8))
+        program = make_program()
+        item = Prescription.objects.create(program=program, procedure=procedures["card_only"])
+        client.force_login(doctor)
+        url = reverse("programs:prescription_cancel", args=[program.pk, item.pk])
+
+        cancelled = client.post(url)
+        item.refresh_from_db()
+        assert item.cancel_date == date(2026, 10, 9)
+        assert "Снять отмену" in cancelled.content.decode()
+
+        client.post(url, {"restore": "1"})
+        item.refresh_from_db()
+        assert item.cancel_date is None
+
+    def test_cancel_error_is_a_message(self, client, doctor, make_program, procedures):
+        """Строка начинается позже завтрашнего дня — отменять с завтра нельзя."""
+        program = make_program()
+        item = Prescription.objects.create(
+            program=program, procedure=procedures["card_only"], start_date=date(2026, 10, 15)
+        )
+        client.force_login(doctor)
+
+        response = client.post(reverse("programs:prescription_cancel", args=[program.pk, item.pk]))
+
+        assert "Отменить можно не раньше следующего дня после начала." in response.content.decode()
+        item.refresh_from_db()
+        assert item.cancel_date is None
+
+    def test_reorder_keeps_cancelled_in_place(
+        self, client, doctor, make_program, procedures, monkeypatch
+    ):
+        monkeypatch.setattr(board_days, "today", lambda: date(2026, 10, 8))
+        program = make_program()
+        a, b, c = (
+            Prescription.objects.create(program=program, procedure=procedures[kind], card_order=n)
+            for n, kind in enumerate(("group", "card_only", "equipment"), start=1)
+        )
+        b.cancel_date = date(2026, 10, 7)
+        b.save()
+        client.force_login(doctor)
+        url = reverse("programs:prescription_reorder", args=[program.pk])
+
+        client.post(url, {"order": [c.pk, a.pk]})
+        stale = client.post(url, {"order": [a.pk]})
+
+        assert [p.pk for p in program.prescriptions.all()] == [c.pk, b.pk, a.pk]
+        assert "Список назначений изменился" in stale.content.decode()
+        assert client.post(url, {"order": ["x"]}).status_code == 404
+
+    def test_move_skips_cancelled(self, client, doctor, make_program, procedures, monkeypatch):
+        """Стрелка «выше» перескакивает свёрнутую отменённую строку."""
+        monkeypatch.setattr(board_days, "today", lambda: date(2026, 10, 8))
+        program = make_program()
+        a, b, c = (
+            Prescription.objects.create(program=program, procedure=procedures[kind], card_order=n)
+            for n, kind in enumerate(("group", "card_only", "equipment"), start=1)
+        )
+        b.cancel_date = date(2026, 10, 7)
+        b.save()
+        client.force_login(doctor)
+
+        response = client.post(reverse("programs:prescription_move", args=[program.pk, c.pk, "up"]))
+
+        assert [p.pk for p in program.prescriptions.all()] == [c.pk, b.pk, a.pk]
+        assert response.context["editing"].pk == c.pk, "панель остаётся открытой"
+
+    def test_withdrawn_patient_gets_message(self, client, doctor, make_program, procedures):
+        program = make_program()
+        item = Prescription.objects.create(program=program, procedure=procedures["card_only"])
+        programs_services.withdraw(doctor, program, date(2026, 10, 6), WithdrawalReason.REFUSAL)
+        client.force_login(doctor)
+
+        response = client.get(reverse("programs:prescription_edit", args=[program.pk, item.pk]))
+
+        assert response.status_code == 200
+        assert "Пациент выбыл" in response.content.decode()
+        assert '<div id="prescription-panel" class="d-none">' in response.content.decode()
 
     def test_move_delete_and_isolation(self, client, doctor, make_program, procedures):
         one = make_program()
