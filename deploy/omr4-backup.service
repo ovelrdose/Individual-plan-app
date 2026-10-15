@@ -1,0 +1,9 @@
+# Копия базы — docs/deploy.md, шаг 10. Запускает таймер omr4-backup.timer.
+[Unit]
+Description=OMR4 database backup (pg_dump)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=postgres
+ExecStart=/opt/omr4/app/deploy/omr4-backup.sh

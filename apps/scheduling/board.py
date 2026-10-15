@@ -58,7 +58,7 @@ def can_edit_patient(user: User, program: Program) -> bool:
 
 def _require_board(user: User) -> None:
     if not can_edit_board(user):
-        raise BoardError("Шахматку правит специалист ФР.")
+        raise BoardError("Расписание правит специалист ФР.")
 
 
 def _require_patient(user: User, program: Program) -> None:
@@ -589,14 +589,14 @@ def move_equipment(
     _require_patient(user, booking.program)
     # Без ensure_boards: она берёт блокировку шахматок раньше программы (порядок — CLAUDE.md).
     if not board_days.editable(booking.date):
-        raise BoardError("Править можно только сегодняшнюю и завтрашнюю шахматку (по будням).")
+        raise BoardError("Править можно только сегодняшнее и завтрашнее расписание (по будням).")
     return manual.edit_booking(user, booking, version, manual.Target(start=start), reason=reason)
 
 
 def _require_editable(day: date) -> None:
     board_days.ensure_boards()
     if not board_days.editable(day):
-        raise BoardError("Править можно только сегодняшнюю и завтрашнюю шахматку (по будням).")
+        raise BoardError("Править можно только сегодняшнее и завтрашнее расписание (по будням).")
 
 
 def _individual_prescription(program: Program, day: date) -> Prescription:
@@ -954,7 +954,7 @@ def _paint_once(
         result = add_block(user, instructor, slot, day, kind, label, group_session=session)
         if result.skipped:
             raise BoardError(
-                f"{on_date}: в ячейке стоит пациент — сначала перенесите его в шахматке."
+                f"{on_date}: в ячейке стоит пациент — сначала перенесите его в расписании."
             )
         return f"{on_date}: разовый блок поставлен."
     if block is not None:

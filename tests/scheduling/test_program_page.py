@@ -100,7 +100,7 @@ class TestCalendarAndBoards:
         client.force_login(rehab)
         page = client.get(reverse("programs:detail", args=[program.pk])).content.decode()
 
-        assert "Шахматка Вт 06.10" in page and "Не распределены" in page
+        assert "Расписание Вт 06.10" in page and "Не распределены" in page
         assert "Подобрать заново" not in page and "Перестройки" not in page
         individual = Booking.objects.get(program=program, date=WED, kind=BookingKind.INDIVIDUAL)
         # Время индивидуального ведёт в шахматку, а не в панель правки.
@@ -116,11 +116,11 @@ class TestRemovedFromPrototype:
         client.force_login(rehab)
 
         assert client.get(reverse("scheduling:booking_panel", args=[booking.pk])).status_code == 404
-        with pytest.raises(manual.EditError, match="в шахматке"):
+        with pytest.raises(manual.EditError, match="в расписании"):
             manual.remove_booking(rehab, booking, booking.version)
-        with pytest.raises(manual.EditError, match="в шахматке"):
+        with pytest.raises(manual.EditError, match="в расписании"):
             manual.unpin(rehab, booking, booking.version)
-        with pytest.raises(manual.EditError, match="в шахматке"):
+        with pytest.raises(manual.EditError, match="в расписании"):
             manual.edit_booking(rehab, booking, booking.version, manual.Target())
 
     def test_not_working_sends_to_unplaced_without_summary(

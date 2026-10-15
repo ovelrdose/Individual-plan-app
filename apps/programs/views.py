@@ -230,7 +230,7 @@ def program_restore(request: HttpRequest, pk: int) -> HttpResponse:
     else:
         messages.success(
             request,
-            "Пациент восстановлен: расписание подобрано заново, в завтрашнюю шахматку он встанет "
+            "Пациент восстановлен: расписание подобрано заново, в завтрашнее расписание он встанет "
             "сам, в сегодняшнюю — через «Не распределены».",
         )
     return redirect("programs:detail", pk=pk)

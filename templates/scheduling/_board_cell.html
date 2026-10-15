@@ -17,7 +17,7 @@
       <p class="text-body-secondary mb-0">Инструктор в этот день не работает.</p>
 
     {% elif not can_edit_day %}
-      <p class="text-body-secondary mb-0">Править можно только сегодняшнюю и завтрашнюю шахматку (по будням).</p>
+      <p class="text-body-secondary mb-0">Править можно только сегодняшнюю и завтрашнее расписание (по будням).</p>
 
     {% else %}
       {% for patient, editable in patients %}

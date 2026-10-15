@@ -30,7 +30,7 @@
         </a>
         {% if schedule.warnings %}
           {# FR-CRD-3: в карте печатается типичный день, отличия по дням — только здесь. #}
-          <div class="small text-warning-emphasis mt-1">В отдельные дни время другое — см. «Расписание»</div>
+          <div class="small text-warning-emphasis mt-1">В отдельные дни время другое — см. «Расписание пациента»</div>
         {% endif %}
       </div>
       {% if can_repeat %}
@@ -61,7 +61,7 @@
     <div class="alert alert-danger d-flex align-items-center gap-3">
       <div>
         <strong>Пациент выбыл с {{ withdrawal.date_from|date:"d.m.Y" }}</strong> — {{ withdrawal.get_reason_display }}{% if withdrawal.note %}: {{ withdrawal.note }}{% endif %}.
-        <div class="small">С этой даты занятий нет, в шахматках его нет. Данные и назначения — только просмотр.</div>
+        <div class="small">С этой даты занятий нет, в расписании его нет. Данные и назначения — только просмотр.</div>
       </div>
       {% if can_restore %}
         <form method="post" action="{% url 'programs:restore' program.pk %}" class="ms-auto"

@@ -92,7 +92,7 @@ class TestGroups:
         proposal = propose(Snapshot(needs=(group(per_day=3, sessions=((1, 540, 570),)),)))
         assert len(times(proposal, 1)) == 3
         assert codes(proposal) == [IssueCode.GROUP_FREQUENCY]
-        assert "в расписании групп 1 занятие" in proposal.conflicts[0].message
+        assert "в «Групповых занятиях» 1 занятие" in proposal.conflicts[0].message
 
     def test_two_per_day(self):
         need = group(per_day=2, sessions=((1, 540, 570), (2, 600, 630), (3, 660, 690)))

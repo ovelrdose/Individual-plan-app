@@ -63,7 +63,7 @@ def read_board_staff(path: Path, groups: dict[str, str]) -> BoardStaff:
             sheets.append((sheet.title, header, rows[1:]))
     workbook.close()
     if not sheets:
-        raise ValueError("В файле нет листов шахматки.")
+        raise ValueError("В файле нет листов расписания.")
     current = sheets[-1][1]
     recent = []
     for item in reversed(sheets):

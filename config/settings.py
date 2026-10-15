@@ -12,6 +12,10 @@ env = environ.Env(
     TIME_ZONE=(str, "Europe/Moscow"),
     PUBLIC_BOARD_NETWORKS=(list, []),
     SESSION_IDLE_HOURS=(int, 8),
+    CSRF_TRUSTED_ORIGINS=(list, []),
+    BEHIND_PROXY=(bool, False),
+    SECURE_HSTS_SECONDS=(int, 0),
+    LOG_LEVEL=(str, "INFO"),
 )
 environ.Env.read_env(BASE_DIR / ".env")
 
@@ -116,3 +120,28 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 # Публичная шахматка (TZ.md, FR-ACC-5). Пустой список — доступ без ограничений.
 PUBLIC_BOARD_NETWORKS = env("PUBLIC_BOARD_NETWORKS")
+
+# --- Прод: HTTPS за nginx (TZ.md, NFR-6; docs/deploy.md) ----------------------------------
+CSRF_TRUSTED_ORIGINS = env("CSRF_TRUSTED_ORIGINS")
+# За nginx: схема — из X-Forwarded-Proto, адрес клиента — из X-Real-IP (публичная шахматка
+# пускает по сети). gunicorn слушает только 127.0.0.1, поэтому заголовки ставит только nginx.
+BEHIND_PROXY = env("BEHIND_PROXY")
+if BEHIND_PROXY:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+if not DEBUG:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_SSL_REDIRECT = BEHIND_PROXY
+    # HSTS — только с доверенным сертификатом клиники: браузер запомнит его на этот срок.
+    SECURE_HSTS_SECONDS = env("SECURE_HSTS_SECONDS")
+
+# Ошибки с трассировкой — в stderr (на проде — журнал systemd). ФИО в журнал не пишутся:
+# Django логирует адрес запроса и трассировку без значений переменных (NFR-7, NFR-8).
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"plain": {"format": "{levelname} {name}: {message}", "style": "{"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "plain"}},
+    "root": {"handlers": ["console"], "level": env("LOG_LEVEL")},
+    "loggers": {"django": {"handlers": ["console"], "level": env("LOG_LEVEL"), "propagate": False}},
+}

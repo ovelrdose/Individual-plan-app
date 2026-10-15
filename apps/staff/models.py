@@ -17,7 +17,7 @@ class Instructor(models.Model):
 
     full_name = models.CharField("ФИО", max_length=150)
     short_name = models.CharField(
-        "как в шахматке", max_length=60, unique=True, help_text="Например «Ким»."
+        "как в расписании", max_length=60, unique=True, help_text="Например «Ким»."
     )
     partner = models.OneToOneField(
         "self",
@@ -26,9 +26,9 @@ class Instructor(models.Model):
         blank=True,
         related_name="+",
         verbose_name="напарник по 2/2",
-        help_text="Напарники работают в одной колонке шахматки. Связь ставится с обеих сторон.",
+        help_text="Напарники работают в одной колонке расписания. Связь ставится с обеих сторон.",
     )
-    display_order = models.PositiveSmallIntegerField("порядок в шахматке", default=0)
+    display_order = models.PositiveSmallIntegerField("порядок в расписании", default=0)
     is_active = models.BooleanField("работает", default=True)
 
     history = HistoricalRecords()

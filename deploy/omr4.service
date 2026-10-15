@@ -1,0 +1,28 @@
+# systemd: веб-сервис ОМР № 4 (gunicorn). Установка — docs/deploy.md, шаг 8.
+#   sudo cp /opt/omr4/app/deploy/omr4.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now omr4
+
+[Unit]
+Description=OMR4 rehabilitation programs (gunicorn)
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=omr4
+Group=omr4
+WorkingDirectory=/opt/omr4/app
+ExecStart=/opt/omr4/venv/bin/gunicorn --config deploy/gunicorn.conf.py config.wsgi:application
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# Защита: только чтение системы, свой /tmp, запись — только в каталог приложения.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/omr4/app
+
+[Install]
+WantedBy=multi-user.target

@@ -201,7 +201,7 @@ class GroupSession(models.Model):
 
     class Meta:
         verbose_name = "занятие группы"
-        verbose_name_plural = "расписание групп"
+        verbose_name_plural = "групповые занятия"
         ordering = ["start_time", "procedure__name"]
         constraints = [
             models.UniqueConstraint(

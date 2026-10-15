@@ -171,6 +171,6 @@ class Command(BaseCommand):
         self.stdout.write(f"Распорядок инструкторов: создано {created}")
         if skipped:
             self.stdout.write(
-                f"Пропущено ведение групп ({skipped}): нет расписания групп — "
+                f"Пропущено ведение групп ({skipped}): нет групповых занятий — "
                 "сначала выполните load_initial_catalog."
             )

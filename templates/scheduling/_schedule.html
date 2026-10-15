@@ -1,11 +1,11 @@
 {% load schedule %}
 {# Расписание программы: проблемы, типичный день (как в карте), календарь курса. #}
 <div id="schedule"{% if oob %} hx-swap-oob="true"{% endif %}>
-  <h2 class="h5 mb-2">Расписание</h2>
+  <h2 class="h5 mb-2">Расписание пациента</h2>
   <p class="text-body-secondary small">
-    Группы ЛФК, бассейн и тренажёры ставятся автоматически на весь курс по расписанию групп и
-    пересчитываются при изменении назначений. Индивидуальные занятия — в шахматке на день вперёд:
-    в типичном дне и в карте — время из ближайшей шахматки, правка — только в шахматке.
+    Группы ЛФК, бассейн и тренажёры ставятся автоматически на весь курс по групповым занятиям и
+    пересчитываются при изменении назначений. Индивидуальные занятия — в расписании на день вперёд:
+    в типичном дне и в карте — время из ближайшего расписания, правка — только в расписании.
     Строки — слоты сетки инструкторов; пустая строка — окно, в это время пациент свободен.
   </p>
 
@@ -14,7 +14,7 @@
     <ul class="list-unstyled mb-3">
       {% for line in schedule.boards %}
         <li>
-          <a href="{% url 'scheduling:board' %}?date={{ line.date|date:'Y-m-d' }}">Шахматка {{ line.date|date:"D d.m" }}</a>:
+          <a href="{% url 'scheduling:board' %}?date={{ line.date|date:'Y-m-d' }}">Расписание {{ line.date|date:"D d.m" }}</a>:
           <span class="{% if line.hold %}text-danger fw-semibold{% endif %}">{{ line.text }}</span>
         </li>
       {% endfor %}
@@ -121,9 +121,9 @@
                     {# Индивидуальное — из шахматки, правится только там (FR-SCH-16). #}
                     <td class="{% if cell.hold == 'не распределён' %}table-danger{% elif not cell.active %}table-secondary{% endif %}">
                       {% for booking in cell.bookings %}<a class="text-reset" href="{% url 'scheduling:board' %}?date={{ row.date|date:'Y-m-d' }}"
-                         title="Открыть шахматку {{ row.date|date:'d.m' }}">{{ booking.start|time:"G:i" }}{% if booking.instructor %} {{ booking.instructor.short_name }}{% endif %}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+                         title="Открыть расписание {{ row.date|date:'d.m' }}">{{ booking.start|time:"G:i" }}{% if booking.instructor %} {{ booking.instructor.short_name }}{% endif %}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
                       {% if cell.hold %}<span class="{% if cell.hold == 'не распределён' %}text-danger{% else %}text-body-secondary{% endif %}">{{ cell.hold }}</span>
-                      {% elif cell.pending %}<span class="text-body-secondary" title="Шахматка на этот день ещё не составлялась">…</span>{% endif %}
+                      {% elif cell.pending %}<span class="text-body-secondary" title="Расписание на этот день ещё не составлялось">…</span>{% endif %}
                     </td>
                   {% else %}
                   <td class="{% if cell.deviation %}table-warning{% elif cell.active and not cell.bookings and not cell.removed %}table-danger{% elif not cell.active %}table-secondary{% endif %}">
@@ -150,7 +150,7 @@
           </tbody>
         </table>
       </div>
-      <p class="small text-body-secondary">Жёлтым — время не как в типичном дне, красным — занятие не поставлено, серым — назначение в этот день не действует. <i class="bi bi-pin-angle"></i> — поставлено вручную, подбор его не меняет.{% if can_schedule %} Нажмите на время группы или тренажёра, чтобы изменить, убрать или открепить занятие.{% endif %} Индивидуальные — по шахматкам: «…» — шахматка на этот день ещё не составлялась.</p>
+      <p class="small text-body-secondary">Жёлтым — время не как в типичном дне, красным — занятие не поставлено, серым — назначение в этот день не действует. <i class="bi bi-pin-angle"></i> — поставлено вручную, подбор его не меняет.{% if can_schedule %} Нажмите на время группы или тренажёра, чтобы изменить, убрать или открепить занятие.{% endif %} Индивидуальные — по расписанию: «…» — расписание на этот день ещё не составлялось.</p>
     </details>
   {% elif not schedule.columns %}
     <p class="text-body-secondary">В назначениях нет групп ЛФК, бассейна, индивидуальных занятий и тренажёров — ставить нечего.</p>

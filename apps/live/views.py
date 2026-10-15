@@ -4,6 +4,7 @@ import queue
 from collections.abc import Iterator
 
 from django.contrib.auth.decorators import login_not_required
+from django.db import connection
 from django.http import Http404, HttpRequest, StreamingHttpResponse
 
 from apps.scheduling.views import public_board_allowed
@@ -37,6 +38,10 @@ def events(request: HttpRequest) -> StreamingHttpResponse:
 def stream(
     wanted: list[str], *, signed_in: bool, heartbeat: float = HEARTBEAT_SECONDS
 ) -> Iterator[str]:
+    # Поток живёт, пока открыта вкладка, а запросов к базе в нём нет: соединение, открытое для
+    # входа и сессии, закрываем — иначе каждая вкладка держит соединение PostgreSQL.
+    if not connection.in_atomic_block:
+        connection.close()
     box = broker.subscribe()
     try:
         yield "retry: 5000\n\n"

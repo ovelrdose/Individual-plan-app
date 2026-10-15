@@ -11,3 +11,8 @@ htmlcov/
 /out/
 .claude
 /primary_docs/test_list/
+
+# Сводки пациентов постов (ФИО, ИБ, диагнозы) и снимок расписания с фамилиями пациентов —
+# только на машине, в репозиторий не попадают.
+primary_docs/Svodka_*.docx
+primary_docs/planomr4.jpg

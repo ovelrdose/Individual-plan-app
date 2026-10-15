@@ -13,13 +13,13 @@
         </li>
         <li class="nav-item">
           <a class="nav-link {% if request.resolver_match.url_name == 'board' %}active fw-semibold{% endif %}" href="{% url 'scheduling:board' %}">
-            <i class="bi bi-grid-3x3"></i> Шахматка
+            <i class="bi bi-grid-3x3"></i> Расписание
           </a>
         </li>
         {% if can_edit_group_schedule %}
           <li class="nav-item">
             <a class="nav-link {% if request.resolver_match.url_name == 'group_schedule' %}active fw-semibold{% endif %}" href="{% url 'scheduling:group_schedule' %}">
-              <i class="bi bi-clock"></i> Расписание групп
+              <i class="bi bi-clock"></i> Групповые занятия
             </a>
           </li>
         {% endif %}

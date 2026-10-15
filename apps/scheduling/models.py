@@ -161,12 +161,12 @@ class BoardDay(models.Model):
     created_at = models.DateTimeField("когда составлена", auto_now_add=True)
 
     class Meta:
-        verbose_name = "шахматка на дату"
-        verbose_name_plural = "шахматки на дату"
+        verbose_name = "расписание на дату"
+        verbose_name_plural = "расписания на дату"
         ordering = ["-date"]
 
     def __str__(self) -> str:
-        return f"Шахматка {self.date:%d.%m.%Y}"
+        return f"Расписание {self.date:%d.%m.%Y}"
 
 
 class BoardPatient(models.Model):
@@ -189,8 +189,8 @@ class BoardPatient(models.Model):
     history = HistoricalRecords()
 
     class Meta:
-        verbose_name = "пациент в шахматке"
-        verbose_name_plural = "пациенты в шахматке"
+        verbose_name = "пациент в расписании"
+        verbose_name_plural = "пациенты в расписании"
         ordering = ["date"]
         constraints = [
             models.UniqueConstraint(fields=["date", "program"], name="board_patient_unique"),

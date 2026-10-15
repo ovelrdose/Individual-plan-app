@@ -315,7 +315,7 @@ def can_edit_group_schedule(user: User) -> bool:
 
 def require_group_schedule(user: User, procedure: Procedure | None = None) -> None:
     if not can_edit_group_schedule(user):
-        raise PermissionDenied("Расписание групп правит специалист ФР.")
+        raise PermissionDenied("Групповые занятия правит специалист ФР.")
     # Группа отделения — только для специалиста этого отделения (решение 3).
     if procedure is not None and procedure.department_id is not None:
         require_role(user, procedure.department, Role.REHAB)

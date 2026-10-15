@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}Шахматка {{ board.day|date:"d.m.Y" }}{% endblock %}
+{% block title %}Расписание {{ board.day|date:"d.m.Y" }}{% endblock %}
 
 {% block navbar %}{% endblock %}
 
 {% block content %}
   <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
-    <h1 class="h3 mb-0 me-3">Шахматка</h1>
+    <h1 class="h3 mb-0 me-3">Расписание</h1>
     <a class="btn btn-sm btn-outline-secondary" href="?date={{ board.previous|date:'Y-m-d' }}"
        title="Предыдущий день"><i class="bi bi-chevron-left"></i></a>
     <form method="get" class="d-flex gap-1">

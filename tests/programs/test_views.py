@@ -281,8 +281,9 @@ class TestPrescriptionScreens:
         item.refresh_from_db()
         assert item.cancel_date is None
 
-    def test_cancel_error_is_a_message(self, client, doctor, make_program, procedures):
+    def test_cancel_error_is_a_message(self, client, doctor, make_program, procedures, monkeypatch):
         """Строка начинается позже завтрашнего дня — отменять с завтра нельзя."""
+        monkeypatch.setattr(board_days, "today", lambda: date(2026, 10, 8))
         program = make_program()
         item = Prescription.objects.create(
             program=program, procedure=procedures["card_only"], start_date=date(2026, 10, 15)

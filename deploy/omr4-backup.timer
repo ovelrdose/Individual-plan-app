@@ -1,0 +1,10 @@
+# Каждый день в 02:30; пропущенный запуск (машина была выключена) — сразу после старта.
+[Unit]
+Description=Daily OMR4 database backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

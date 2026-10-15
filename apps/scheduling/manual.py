@@ -375,7 +375,7 @@ def _plan(
 
 def _require_not_individual(booking: Booking) -> None:
     if booking.kind == BookingKind.INDIVIDUAL:
-        raise EditError("Индивидуальные занятия правятся в шахматке.")
+        raise EditError("Индивидуальные занятия правятся в расписании.")
 
 
 @transaction.atomic

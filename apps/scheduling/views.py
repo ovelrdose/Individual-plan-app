@@ -186,7 +186,7 @@ def board_view(request: HttpRequest) -> HttpResponse:
 
 def board_cell(request: HttpRequest) -> HttpResponse:
     if not board.can_edit_board(request.user):
-        raise PermissionDenied("Шахматку правит специалист ФР.")
+        raise PermissionDenied("Расписание правит специалист ФР.")
     cell = _cell(request, request.GET)
     return _panel(request, cell)
 
@@ -229,7 +229,7 @@ def board_equipment_move(request: HttpRequest, pk: int) -> HttpResponse:
     """Перенести пациента на другое время тренажёра перетаскиванием (FR-SCH-10a). Сверх
     вместимости или вне окна — панель с вопросом о причине, ошибка — панель с текстом."""
     if not board.can_edit_board(request.user):
-        raise PermissionDenied("Шахматку правит специалист ФР.")
+        raise PermissionDenied("Расписание правит специалист ФР.")
     booking = get_object_or_404(
         Booking.objects.select_related("program", "equipment"), pk=pk, kind=BookingKind.EQUIPMENT
     )
@@ -285,7 +285,7 @@ def board_note(request: HttpRequest, pk: int) -> HttpResponse:
 def board_patient(request: HttpRequest) -> HttpResponse:
     """Панель пациента из блока «Не распределены» / «Отменены»: выбрать ячейку и поставить."""
     if not board.can_edit_board(request.user):
-        raise PermissionDenied("Шахматку правит специалист ФР.")
+        raise PermissionDenied("Расписание правит специалист ФР.")
     day = _board_day(request.GET.get("date"))
     candidate = next(
         (
@@ -492,7 +492,7 @@ def _panel(
     request: HttpRequest, cell: _Cell, *, error: str = "", confirm: list | None = None
 ) -> HttpResponse:
     if not board.can_edit_board(request.user):
-        raise PermissionDenied("Шахматку правит специалист ФР.")
+        raise PermissionDenied("Расписание правит специалист ФР.")
     current = board.board(request.user, cell.day)
     seat = next(
         (
@@ -723,7 +723,7 @@ def board_off(request: HttpRequest) -> HttpResponse:
     """«Не работает» из шахматки одним действием: исключение смены, его пациенты — в
     «Не распределены» (FR-STF-6)."""
     if not board.can_edit_board(request.user):
-        raise PermissionDenied("Шахматку правит специалист ФР.")
+        raise PermissionDenied("Расписание правит специалист ФР.")
     instructor = get_object_or_404(Instructor, pk=_int(request.POST.get("instructor")))
     day = _board_day(request.POST.get("date"))
     staff_changes.set_not_working(request.user, instructor, day)
@@ -750,7 +750,7 @@ def board_export(request: HttpRequest) -> HttpResponse:
     day = _board_day(request.GET.get("date"))
     content = render_board(board.sheet(board.board(request.user, day)))
     response = HttpResponse(content, content_type=XLSX)
-    filename = f"Шахматка {day:%d.%m.%Y}.xlsx"
+    filename = f"Расписание {day:%d.%m.%Y}.xlsx"
     response["Content-Disposition"] = (
         f"attachment; filename=\"board.xlsx\"; filename*=UTF-8''{quote(filename)}"
     )
@@ -767,12 +767,19 @@ def public_board(request: HttpRequest) -> HttpResponse:
     return render(request, "scheduling/public_board.html", {"board": board.board(None, day)})
 
 
+def client_address(request: HttpRequest) -> str:
+    """За nginx адрес клиента — в X-Real-IP (BEHIND_PROXY), иначе REMOTE_ADDR."""
+    if settings.BEHIND_PROXY:
+        return request.META.get("HTTP_X_REAL_IP", "")
+    return request.META.get("REMOTE_ADDR", "")
+
+
 def public_board_allowed(request: HttpRequest) -> bool:
     networks = [item.strip() for item in settings.PUBLIC_BOARD_NETWORKS if item.strip()]
     if not networks:
         return True  # локальная разработка: настройка не задана
     try:
-        address = ipaddress.ip_address(request.META.get("REMOTE_ADDR", ""))
+        address = ipaddress.ip_address(client_address(request))
         return any(address in ipaddress.ip_network(net, strict=False) for net in networks)
     except ValueError:
         return False

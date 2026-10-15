@@ -62,7 +62,7 @@ class _State:
             )
             return
         if not need.sessions:
-            self._issue(IssueCode.NO_SESSIONS, need, "у группы нет занятий в расписании групп")
+            self._issue(IssueCode.NO_SESSIONS, need, "у группы нет занятий в «Групповых занятиях»")
             return
         options = [
             _Option(s.start, s.end, s.id)
@@ -75,7 +75,7 @@ class _State:
             self._issue(
                 IssueCode.GROUP_FREQUENCY,
                 need,
-                f"назначено {need.per_day} р/д, а в расписании групп {_times(len(options))} "
+                f"назначено {need.per_day} р/д, а в «Групповых занятиях» {_times(len(options))} "
                 f"в день — поставлено {units}",
             )
         for unit in range(units):

@@ -12,7 +12,8 @@
 
 Документация — в `docs/`:
 - `docs/02-stack.md` — стек;
-- `docs/TZ.md` — техническое задание (v2.1: программы, импорт листа назначений, карта).
+- `docs/TZ.md` — техническое задание (v2.1: программы, импорт листа назначений, карта);
+- `README.md` — обзор и запуск, `docs/user-guide.md` — для врача и специалиста ФР, `docs/admin-guide.md` — для администратора, `docs/deploy.md` — установка на сервер, `docs/input-files.md` — как заполнять входные файлы. Меняется поведение экрана или команды — правится и руководство.
 
 Блок расписания переделывается в «расписание v2» (`docs/TZ.md` §7, согласовано 05.10.2026): индивидуальные — в шахматке на день вперёд, только будни. Текущий код `apps/scheduling` — первый прототип, автотестов у него нет; смены, постоянная занятость и вид сетки из него остаются.
 
@@ -20,7 +21,7 @@
 
 ## Стек и версии
 
-Согласовано (см. `docs/02-stack.md`): Python 3.12+, Django 5.2 LTS, PostgreSQL 16+, шаблоны Django + HTMX + Alpine.js, Bootstrap 5 (всё локально, без CDN), openpyxl, python-docx, django-simple-history, pytest. Деплой (фаза 5) — Docker Compose (nginx + gunicorn + PostgreSQL) на сервере клиники.
+Согласовано (см. `docs/02-stack.md`): Python 3.12+, Django 5.2 LTS, PostgreSQL 16+, шаблоны Django + HTMX + Alpine.js, Bootstrap 5 (всё локально, без CDN), openpyxl, python-docx, django-simple-history, pytest. Деплой — виртуальная машина Ubuntu 24.04: venv + gunicorn (systemd) + nginx + PostgreSQL (решение 73, `docs/deploy.md`, конфиги — `deploy/`). Зависимости прода — `requirements.txt`, собирается из группы `prod`; при смене зависимостей пересобрать.
 
 **MS Excel — основной редактор таблиц в организации.** Все правки вносятся в веб-системе, а выгруженный `.xlsx` нужен для печати из MS Excel. Выгрузка должна корректно открываться в MS Excel; даты и время записываются настоящими значениями Excel.
 
@@ -39,7 +40,7 @@
 
 ## Запуск и отладка
 
-Только локальная разработка: `.venv` + PostgreSQL 16 на хосте. Docker и прод — в фазе 5.
+Разработка: `.venv` + PostgreSQL 16 на хосте. Прод — `docs/deploy.md`; его настройки (`BEHIND_PROXY`, `CSRF_TRUSTED_ORIGINS`, …) в разработке не задаются.
 
 ```bash
 python3 -m venv .venv                       # один раз (нужен пакет python3.12-venv)
@@ -49,10 +50,12 @@ cp .env.example .env                        # и поправить SECRET_KEY, 
 .venv/bin/python manage.py migrate
 .venv/bin/python manage.py load_initial_catalog  # справочники из primary_docs (повторный запуск безопасен)
 .venv/bin/python manage.py seed_dev         # пользователи admin / doctor / rehab и вымышленные инструкторы
+                                            # (рабочая установка — create_users: пароли спрашивает, без DEBUG)
 .venv/bin/python manage.py load_board_instructors --since 2026-09-01 --replace  # для показа: настоящие инструкторы
                                             # и распорядок из primary_docs/instructions_schedule.xlsx (согласие есть)
-.venv/bin/python manage.py load_demo_board   # для показа: пациенты и шахматка как на primary_docs/plan.jpg
-                                            # (удаляет всех пациентов; после load_board_instructors)
+.venv/bin/python manage.py load_current_patients  # текущие пациенты по сводкам постов (primary_docs/Svodka_*.docx)
+                                            # и шахматка как на primary_docs/planomr4.jpg (удаляет всех пациентов;
+                                            # после load_board_instructors). Сводки — реальные данные: только рабочая база
 .venv/bin/python manage.py runserver
 ```
 
@@ -126,6 +129,7 @@ templates/           base.html, includes/ (шапка, сообщения, по�
                      фрагменты для HTMX — с подчёркиванием: programs/_prescriptions.html
 static/vendor/       bootstrap, bootstrap-icons, htmx, alpine — локально, версии в VERSIONS.md
 static/css/app.css   свои стили (минимум)
+deploy/              прод: gunicorn.conf.py, systemd (omr4.service, бэкап), nginx, образец .env
 tests/               зеркально apps/; tests/sheets.py — генератор обезличенного листа назначений (.docx)
 out/                 сгенерированные файлы (в .gitignore)
 ```
@@ -150,7 +154,8 @@ out/                 сгенерированные файлы (в .gitignore)
 | ЛФК | Лечебная физкультура; групповые занятия идут по фиксированному расписанию (`lfk.xlsx`) |
 | ЛФК в воде / бассейн | Групповые занятия по типу: верхняя конечность, нижняя конечность, спина (`basseyn.xlsx`). Группа выбирается по назначению врача и времени её занятия |
 | Инд., инд. занятие | Индивидуальное занятие с инструктором (30 мин); не больше 2 в день, лимит задаёт врач |
-| Шахматка | Ежедневное расписание инструкторов (`instructions_schedule.xlsx`, один лист на день) |
+| Шахматка | Ежедневное расписание индивидуальных занятий инструкторов (`instructions_schedule.xlsx`, один лист на день). **На экране — «Расписание»** (решение 72), в коде — `board`, в комментариях — «шахматка» |
+| Групповые занятия | Экран и справочник расписания групп ЛФК, ДС и бассейна (`GroupSession`, `group_schedule`); в комментариях — «расписание групп» |
 | «Nп Фамилия» | Запись пациента в шахматке: N — номер палаты, «а» — вариант палаты (5а) |
 | «Метод. работа» | Слот инструктора, недоступный для пациентов |
 | «Паршуков/ Ким» | Два инструктора в одной колонке, которые работают по графику 2/2 |

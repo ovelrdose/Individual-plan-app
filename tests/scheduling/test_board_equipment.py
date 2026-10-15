@@ -83,7 +83,7 @@ class TestService:
     def test_only_today_and_tomorrow(self, patient, rehab):
         board_days.ensure_boards()
         booking = equipment_on(patient(start_date=date(2026, 10, 2)), MON)
-        with pytest.raises(board.BoardError, match="сегодняшнюю и завтрашнюю"):
+        with pytest.raises(board.BoardError, match="сегодняшнее и завтрашнее"):
             board.move_equipment(rehab, booking, booking.version, time(14, 0))
 
     def test_rights(self, two, doctor, make_user, other_department):

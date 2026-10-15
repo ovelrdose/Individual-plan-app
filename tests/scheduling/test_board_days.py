@@ -186,7 +186,7 @@ class TestManualEdit:
     def test_only_today_and_tomorrow(self, patient, rehab, staff, slots):
         board_days.ensure_boards()
         program = patient(start_date=date(2026, 10, 1))
-        with pytest.raises(board.BoardError, match="сегодняшнюю и завтрашнюю"):
+        with pytest.raises(board.BoardError, match="сегодняшнее и завтрашнее"):
             board.place_patient(rehab, program, staff["sokolov"], slots["9:10"], MON)
 
     def test_doctor_cannot_edit(self, patient, doctor, staff, slots):
@@ -263,7 +263,7 @@ class TestScreen:
         page = client.get(reverse("scheduling:board"), {"date": "2026-10-03"}).content.decode()
         assert "не составляется" in page
         page = client.get(reverse("scheduling:board"), {"date": "2026-09-28"}).content.decode()
-        assert "не составлялась" in page
+        assert "не составлялось" in page
 
     def test_no_future_beyond_tomorrow(self, client, rehab, db, today):
         """Вперёд — только до завтрашней шахматки: будущих нет, листать туда нечего."""

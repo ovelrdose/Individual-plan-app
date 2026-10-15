@@ -8,7 +8,7 @@ import time
 from datetime import date
 
 import pytest
-from django.db import transaction
+from django.db import connection, transaction
 from django.http import HttpResponse
 from django.test import RequestFactory
 from django.urls import reverse
@@ -163,6 +163,20 @@ class TestStream:
         assert next(chunks) == 'data: {"topics": ["board:2026-10-07"], "by": "", "client": ""}\n\n'
         chunks.close()
 
+    @pytest.mark.django_db(transaction=True)
+    def test_stream_releases_db_connection(self, monkeypatch):
+        """Вкладка с потоком не держит соединение PostgreSQL."""
+        local = Broker()
+        monkeypatch.setattr(local, "subscribe", lambda: queue.Queue())
+        monkeypatch.setattr("apps.live.views.broker", local)
+        connection.ensure_connection()
+
+        chunks = stream([], signed_in=True, heartbeat=0.05)
+        next(chunks)
+
+        assert connection.connection is None
+        chunks.close()
+
     def test_dispatch_drops_oldest_when_full(self):
         local = Broker()
         box: queue.Queue = queue.Queue(maxsize=1)
@@ -193,6 +207,19 @@ class TestView:
 
         settings.PUBLIC_BOARD_NETWORKS = ["10.0.0.0/8"]
         assert client.get(reverse("live_events")).status_code == 404
+
+    def test_network_from_proxy_header(self, client, settings, monkeypatch, db):
+        """За nginx (BEHIND_PROXY) адрес клиента — X-Real-IP, а не адрес самого nginx."""
+        monkeypatch.setattr("apps.live.views.stream", lambda wanted, signed_in: iter(["ok"]))
+        settings.PUBLIC_BOARD_NETWORKS = ["10.0.0.0/8"]
+        settings.BEHIND_PROXY = True
+
+        inside = client.get(reverse("live_events"), HTTP_X_REAL_IP="10.1.2.3")
+        outside = client.get(reverse("live_events"), HTTP_X_REAL_IP="192.168.1.5")
+        missing = client.get(reverse("live_events"))
+
+        assert inside.status_code == 200
+        assert outside.status_code == 404 and missing.status_code == 404
 
 
 class TestMiddleware:
