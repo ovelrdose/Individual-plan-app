@@ -2,10 +2,16 @@ from pathlib import Path
 
 import pytest
 from django.conf import settings
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 from apps.cards.card_templates import bundled_mappings, bundled_template
-from apps.cards.xlsx.extract import data_cells, extract_templates
+from apps.cards.xlsx.extract import (
+    column_width,
+    data_cells,
+    extract_templates,
+    move_back_text,
+    print_scale,
+)
 
 SOURCE = Path(settings.BASE_DIR) / "primary_docs" / "programm_template.xlsx"
 MAPPINGS = bundled_mappings()
@@ -20,8 +26,28 @@ def assert_clean_template(path: Path, shrm: int) -> None:
     }
     assert leftovers == {}, "в шаблоне остались примерные данные"
     assert len(sheet._images) == 1
-    assert sheet.sheet_properties.pageSetUpPr.fitToPage
     assert sheet.print_area.endswith(f"${MAPPINGS[shrm].date_blocks[-1].last_procedure_row}")
+    assert_two_sided(sheet, shrm)
+
+
+def assert_two_sided(sheet, shrm: int) -> None:
+    """Лицевая сторона — расписание и шапка, оборотная — «Уважаемый пациент!» и даты."""
+    last_schedule_row = MAPPINGS[shrm].schedule.last_row
+    assert [b.id for b in sheet.row_breaks.brk] == [last_schedule_row]
+    # «Вписать в страницу» Excel применяет без ручных разрывов — масштаб числом.
+    assert not sheet.sheet_properties.pageSetUpPr.fitToPage
+    assert 30 <= sheet.page_setup.scale <= 100
+    assert sheet.page_setup.orientation == "landscape"
+    assert int(sheet.page_setup.paperSize) == int(sheet.PAPERSIZE_A4)
+    front = [c.value for row in sheet.iter_rows(max_row=last_schedule_row) for c in row]
+    assert "Уважаемый пациент!" not in front
+    assert sheet[f"K{last_schedule_row + 1}"].value == "Уважаемый пациент!"
+    # Перекрывающиеся описания колонок Excel читает непредсказуемо.
+    covered: set[int] = set()
+    for dim in sheet.column_dimensions.values():
+        columns = set(range(dim.min, dim.max + 1))
+        assert not columns & covered, f"колонка {dim.index} описана дважды"
+        covered |= columns
 
 
 @pytest.mark.skipif(not SOURCE.exists(), reason="нет исходного файла заказчика")
@@ -36,3 +62,37 @@ def test_extract_from_customer_file(tmp_path):
 @pytest.mark.parametrize("shrm", [3, 4, 5])
 def test_bundled_templates_are_clean(shrm):
     assert_clean_template(bundled_template(shrm), shrm)
+
+
+def test_column_width_reads_grouped_columns_without_creating_them():
+    sheet = Workbook().active
+    sheet.column_dimensions.group("C", "F", hidden=False)
+    sheet.column_dimensions["C"].width = 7.5
+
+    assert column_width(sheet, 5) == 7.5
+    assert column_width(sheet, 10) == pytest.approx(8.43)
+    assert list(sheet.column_dimensions) == ["C"]
+
+
+def test_print_scale_fits_tallest_page():
+    sheet = Workbook().active
+    for row in range(1, 41):
+        sheet.row_dimensions[row].height = 30
+    sheet.page_margins.top = sheet.page_margins.bottom = 0.2
+
+    one_page = print_scale(sheet, 10, [(1, 10)])
+    two_pages = print_scale(sheet, 10, [(1, 10), (11, 40)])
+
+    assert one_page == 100, "маленькая карта не увеличивается"
+    # 30 строк по 30 пт = 900 пт на странице высотой 595 − 29 пт.
+    assert two_pages == int((595 - 0.4 * 72) / 900 * 0.92 * 100)
+
+
+def test_move_back_text_refuses_to_overwrite():
+    sheet = Workbook().active
+    mapping = MAPPINGS[4]
+    sheet["K13"] = "Уважаемый пациент!"
+    sheet["K16"] = "мешает"
+
+    with pytest.raises(ValueError, match="не пустая"):
+        move_back_text(sheet, mapping)
