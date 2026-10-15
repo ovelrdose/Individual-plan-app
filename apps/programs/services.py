@@ -99,14 +99,19 @@ def doctors_for(department: Department) -> QuerySet[User]:
     ).order_by("short_name", "last_name")
 
 
+# Кто создаёт программы (в том числе из листа назначений) и правит их данные и назначения:
+# врач и специалист ФР отделения, администратор — всегда (решение 75).
+PROGRAM_EDITORS = (Role.DOCTOR, Role.REHAB)
+
+
 def can_edit(user: User, program: Program) -> bool:
-    """Данные программы и назначения правит врач отделения и администратор (§3); у выбывшего —
-    только просмотр (FR-PRG-9)."""
-    return has_role(user, program.department, Role.DOCTOR) and program.withdrawal is None
+    """Данные программы и назначения правят врач и специалист ФР отделения и администратор
+    (§3, решение 75); у выбывшего — только просмотр (FR-PRG-9)."""
+    return has_role(user, program.department, *PROGRAM_EDITORS) and program.withdrawal is None
 
 
 def can_create(user: User, department: Department) -> bool:
-    return has_role(user, department, Role.DOCTOR)
+    return has_role(user, department, *PROGRAM_EDITORS)
 
 
 def review_items(program: Program) -> list[str]:
@@ -143,7 +148,7 @@ def save_program(user: User, program: Program, *, end_date_changed: bool) -> Pro
     пересчитывается по ШРМ и дате начала. Если врач ввёл дату, отличную от расчётной, —
     это продление или досрочное окончание, дальше она не пересчитывается.
     """
-    require_role(user, program.department, Role.DOCTOR)
+    require_role(user, program.department, *PROGRAM_EDITORS)
     if program.pk:
         _lock(program)
         if program.withdrawals.filter(returned_on__isnull=True).exists():
@@ -173,7 +178,7 @@ def save_program(user: User, program: Program, *, end_date_changed: bool) -> Pro
 def dismiss_warnings(user: User, program: Program) -> None:
     """Врач проверил предупреждения импорта и закрыл блок (FR-PRG-6)."""
     program = _lock(program)
-    require_role(user, program.department, Role.DOCTOR)
+    require_role(user, program.department, *PROGRAM_EDITORS)
     program.import_warnings = []
     _save(program, user, update_fields=["import_warnings", "updated_at"])
 
@@ -294,7 +299,7 @@ def cancel_prescription(user: User, prescription: Prescription, day: date | None
 
 
 def require_editable(user: User, program: Program) -> None:
-    require_role(user, program.department, Role.DOCTOR)
+    require_role(user, program.department, *PROGRAM_EDITORS)
     if program.withdrawals.filter(returned_on__isnull=True).exists():
         raise ProgramsError("Пациент выбыл — данные и назначения только для просмотра.")
 

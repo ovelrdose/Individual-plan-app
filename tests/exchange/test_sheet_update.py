@@ -11,6 +11,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
+from apps.accounts.models import Role
 from apps.catalog.models import Procedure
 from apps.exchange.prescription_sheet import parse_sheet
 from apps.exchange.services import (
@@ -185,9 +186,12 @@ class TestService:
         assert any("ИБ № 999" in w for w in update.warnings)
         assert any("Другова" in w for w in update.warnings)
 
-    def test_rights_withdrawn_and_finished(self, doctor, rehab, program, monkeypatch):
+    def test_rights_withdrawn_and_finished(
+        self, doctor, make_user, other_department, program, monkeypatch
+    ):
+        stranger = make_user("stranger", (other_department, Role.REHAB))
         with pytest.raises(PermissionDenied):
-            apply_sheet_update(rehab, program, sheet(rows=FIRST))
+            apply_sheet_update(stranger, program, sheet(rows=FIRST))
 
         programs.withdraw(doctor, program, TUE, WithdrawalReason.REFUSAL)
         with pytest.raises(ProgramsError, match="выбыл"):
@@ -209,9 +213,10 @@ class TestScreens:
         client.force_login(doctor)
         assert url in client.get(reverse("programs:detail", args=[program.pk])).content.decode()
 
+        # Специалист ФР обновляет программу из листа, как и врач (решение 75).
         client.force_login(rehab)
-        assert url not in client.get(reverse("programs:detail", args=[program.pk])).content.decode()
-        assert client.get(url).status_code == 403
+        assert url in client.get(reverse("programs:detail", args=[program.pk])).content.decode()
+        assert client.get(url).status_code == 200
 
     def test_upload_preview_apply(self, client, doctor, program):
         client.force_login(doctor)

@@ -90,20 +90,31 @@ class TestEndDate:
 
 
 class TestRights:
-    def test_rehab_cannot_create_or_change(
-        self, make_program, rehab, doctor, procedures, department
-    ):
+    def test_rehab_creates_and_changes(self, make_program, rehab, procedures, department):
+        """Специалист ФР правит программу наравне с врачом (решение 75)."""
         program = make_program()
         program.room = "10"
 
+        services.save_program(rehab, program, end_date_changed=False)
+        add(rehab, program, procedures["group"])
+        services.dismiss_warnings(rehab, program)
+        assert services.can_edit(rehab, program)
+        assert services.can_create(rehab, department)
+
+    def test_stranger_cannot_create_or_change(
+        self, make_program, make_user, procedures, department, other_department
+    ):
+        program = make_program()
+        stranger = make_user("stranger", (other_department, Role.REHAB))
+
         with pytest.raises(PermissionDenied):
-            services.save_program(rehab, program, end_date_changed=False)
+            services.save_program(stranger, program, end_date_changed=False)
         with pytest.raises(PermissionDenied):
-            add(rehab, program, procedures["group"])
+            add(stranger, program, procedures["group"])
         with pytest.raises(PermissionDenied):
-            services.dismiss_warnings(rehab, program)
-        assert not services.can_edit(rehab, program)
-        assert not services.can_create(rehab, department)
+            services.dismiss_warnings(stranger, program)
+        assert not services.can_edit(stranger, program)
+        assert not services.can_create(stranger, department)
 
     def test_attending_doctor_must_be_doctor_of_department(self, make_program, rehab):
         with pytest.raises(ProgramsError, match="Лечащий врач"):

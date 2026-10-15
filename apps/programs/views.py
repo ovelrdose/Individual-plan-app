@@ -51,7 +51,7 @@ def program_create(request: HttpRequest) -> HttpResponse:
     """Запасной путь — без листа назначений (FR-PRG-5)."""
     department = current_department(request)
     if department is None or not services.can_create(request.user, department):
-        raise PermissionDenied("Создавать программы может врач отделения.")
+        raise PermissionDenied("Создавать программы может врач или специалист ФР отделения.")
     program = Program(department=department, start_date=date.today(), source=ProgramSource.MANUAL)
     if role_in(request.user, department) == Role.DOCTOR:
         program.attending_doctor = request.user
@@ -63,7 +63,7 @@ def program_repeat(request: HttpRequest, pk: int) -> HttpResponse:
     курс — новый, по умолчанию назначения берутся из прошлого курса."""
     previous = services.get_program_or_404(request.user, pk)
     if not services.can_create(request.user, previous.department):
-        raise PermissionDenied("Создавать программы может врач отделения.")
+        raise PermissionDenied("Создавать программы может врач или специалист ФР отделения.")
     if not previous.is_finished(board_days.today()) and previous.withdrawal is None:
         messages.error(request, "Курс ещё идёт — повторный курс создаётся после его окончания.")
         return redirect("programs:detail", pk=pk)
@@ -87,7 +87,7 @@ def program_repeat(request: HttpRequest, pk: int) -> HttpResponse:
 def program_edit(request: HttpRequest, pk: int) -> HttpResponse:
     program = services.get_program_or_404(request.user, pk)
     if not services.can_edit(request.user, program):
-        raise PermissionDenied("Данные программы правит врач отделения.")
+        raise PermissionDenied("Данные программы правит врач или специалист ФР отделения.")
     return _program_form(request, program, "Данные пациента и курса")
 
 

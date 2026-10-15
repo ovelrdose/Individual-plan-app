@@ -11,6 +11,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
+from apps.accounts.models import Role
 from apps.exchange.prescription_sheet import parse_sheet
 from apps.exchange.services import (
     DuplicateProgramError,
@@ -114,10 +115,16 @@ class TestFindAndCopy:
         services.link_previous(doctor, third, second, copy=False)
         assert services.patient_courses(Program.objects.get(pk=second.pk)) == [old, second, third]
 
-    def test_rehab_cannot_link(self, old, rehab, make_program):
+    def test_rehab_links_stranger_cannot(
+        self, old, rehab, make_program, make_user, other_department
+    ):
         new = make_program(full_name=NAME, start_date=date(2026, 11, 2))
+        stranger = make_user("stranger", (other_department, Role.REHAB))
         with pytest.raises(PermissionDenied):
-            services.link_previous(rehab, new, old, copy=False)
+            services.link_previous(stranger, new, old, copy=False)
+
+        services.link_previous(rehab, new, old, copy=False)
+        assert Program.objects.get(pk=new.pk).previous == old
 
 
 class TestScreens:

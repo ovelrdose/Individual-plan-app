@@ -194,9 +194,16 @@ class TestImportService:
 
         do_import(doctor, department)
 
-    def test_rehab_cannot_import(self, rehab, doctor, department):
+    def test_rehab_imports_with_attending_doctor(self, rehab, doctor, department):
+        """Специалист ФР загружает лист за врача отделения (решение 75)."""
+        program = import_prescription_sheet(rehab, department, sheet(), attending_doctor=doctor)
+
+        assert program.attending_doctor == doctor
+
+    def test_stranger_cannot_import(self, make_user, doctor, department, other_department):
+        stranger = make_user("stranger", (other_department, Role.REHAB))
         with pytest.raises(PermissionDenied):
-            import_prescription_sheet(rehab, department, sheet(), attending_doctor=doctor)
+            import_prescription_sheet(stranger, department, sheet(), attending_doctor=doctor)
 
     def test_diagnosis_is_not_stored(self, client, doctor, department):
         """Диагноза нет в карте — в системе его тоже нет (TZ.md, решение 70)."""
@@ -309,8 +316,18 @@ class TestImportScreens:
         client.post(self.url, {"file": upload(), "attending_doctor": doctor.pk})
         assert Program.objects.get().attending_doctor == doctor
 
-    def test_rehab_has_no_access(self, client, rehab):
+    def test_rehab_chooses_doctor(self, client, rehab, doctor):
         client.force_login(rehab)
+
+        assert "attending_doctor" in client.get(self.url).context["form"].fields
+        without = client.post(self.url, {"file": upload()})
+        assert "attending_doctor" in without.context["form"].errors
+
+        client.post(self.url, {"file": upload(), "attending_doctor": doctor.pk})
+        assert Program.objects.get().attending_doctor == doctor
+
+    def test_user_without_role_has_no_access(self, client, make_user):
+        client.force_login(make_user("nobody"))
 
         assert client.get(self.url).status_code == 403
 
@@ -614,10 +631,10 @@ class TestImportDepartment:
         assert program.department == department
         assert client.session[SESSION_DEPARTMENT_KEY] == department.pk, "шапка переключилась"
 
-    def test_department_where_user_is_not_doctor_is_not_offered(
+    def test_department_without_role_is_not_offered(
         self, client, make_user, department, other_department
     ):
-        user = make_user("mixed", (department, Role.DOCTOR), (other_department, Role.REHAB))
+        user = make_user("mixed", (department, Role.DOCTOR))
         client.force_login(user)
 
         choices = list(client.get(IMPORT_URL).context["form"].fields["department"].queryset)
@@ -761,17 +778,17 @@ class TestPendingSheets:
         assert response.status_code in (302, 404)
         assert Program.objects.count() == 1
 
-    def test_tampered_department_where_user_is_rehab_is_403(
+    def test_tampered_department_where_user_has_no_role_is_refused(
         self, client, make_user, department, other_department
     ):
-        user = make_user("mixed", (department, Role.DOCTOR), (other_department, Role.REHAB))
+        user = make_user("mixed", (department, Role.DOCTOR))
         select(client, department)
         token = self._make_pending(client, user)
         self._tamper(client, token, department=other_department.pk)
 
         response = client.post(FORCE_URL, {"token": token})
 
-        assert response.status_code == 403
+        assert response.status_code in (302, 403, 404)
         assert not Program.objects.filter(department=other_department).exists()
 
     def test_tampered_doctor_of_other_department(self, client, doctor, make_user, other_department):

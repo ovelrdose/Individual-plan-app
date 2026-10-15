@@ -7,17 +7,20 @@ from apps.accounts.access import departments_for, is_admin, role_in
 from apps.accounts.models import Role, User
 from apps.common.forms import BootstrapFormMixin
 from apps.org.models import Department
-from apps.programs.services import doctors_for
+from apps.programs.services import PROGRAM_EDITORS, doctors_for
 
 from .services import MAX_FILE_SIZE
 
 
 def import_departments(user: User) -> QuerySet[Department]:
-    """Отделения, куда пользователь может загрузить лист: где он врач (администратор — все)."""
+    """Отделения, куда пользователь может загрузить лист: где он врач или специалист ФР
+    (администратор — все)."""
     departments = departments_for(user)
     if is_admin(user):
         return departments
-    return departments.filter(memberships__user=user, memberships__role=Role.DOCTOR)
+    return departments.filter(
+        memberships__user=user, memberships__role__in=PROGRAM_EDITORS
+    ).distinct()
 
 
 class SheetFileForm(BootstrapFormMixin, forms.Form):
@@ -49,7 +52,7 @@ class SheetUploadForm(SheetFileForm):
         queryset=User.objects.none(),
         label="Лечащий врач",
         required=False,
-        help_text="Нужен, если загружает не врач отделения (например, администратор).",
+        help_text="Нужен, если загружает не врач отделения (специалист ФР, администратор).",
     )
 
     def __init__(self, *args, user: User, initial_department: Department | None, **kwargs):

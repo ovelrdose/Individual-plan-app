@@ -43,14 +43,14 @@ class TestList:
         assert "Создать вручную" in html
         assert "требует проверки" in html
 
-    def test_rehab_sees_list_without_buttons(self, client, rehab, make_program):
+    def test_rehab_sees_list_with_buttons(self, client, rehab, make_program):
         make_program(start_date=date.today())
         client.force_login(rehab)
 
         html = client.get(reverse("programs:list")).content.decode()
 
         assert "Тестов Тест Тестович" in html
-        assert "Загрузить лист назначений" not in html
+        assert "Загрузить лист назначений" in html
 
     def test_bad_period_is_ignored(self, client, doctor):
         client.force_login(doctor)
@@ -128,19 +128,19 @@ class TestProgramScreens:
         html = client.get(reverse("programs:detail", args=[program.pk])).content.decode()
         assert "Проверьте после импорта" not in html
 
-    def test_rehab_view_only(self, client, rehab, make_program):
+    def test_rehab_edits_like_doctor(self, client, rehab, make_program):
         program = make_program()
         client.force_login(rehab)
 
         detail = client.get(reverse("programs:detail", args=[program.pk]))
         assert detail.status_code == 200
-        assert detail.context["can_edit"] is False
+        assert detail.context["can_edit"] is True
         page = detail.content.decode()
-        assert reverse("programs:prescription_add", args=[program.pk]) not in page
-        assert client.get(reverse("programs:create")).status_code == 403
-        assert client.get(reverse("programs:edit", args=[program.pk])).status_code == 403
+        assert reverse("programs:prescription_add", args=[program.pk]) in page
+        assert client.get(reverse("programs:create")).status_code == 200
+        assert client.get(reverse("programs:edit", args=[program.pk])).status_code == 200
         assert (
-            client.post(reverse("programs:dismiss_warnings", args=[program.pk])).status_code == 403
+            client.post(reverse("programs:dismiss_warnings", args=[program.pk])).status_code != 403
         )
 
     def test_foreign_department_is_404(self, client, make_user, other_department, make_program):
@@ -375,7 +375,7 @@ class TestPrescriptionScreens:
         client.post(reverse("programs:prescription_delete", args=[one.pk, second.pk]))
         assert list(one.prescriptions.all()) == [first]
 
-    def test_rehab_gets_403(self, client, rehab, make_program, procedures):
+    def test_rehab_edits_and_deletes(self, client, rehab, make_program, procedures):
         program = make_program()
         item = Prescription.objects.create(program=program, procedure=procedures["group"])
         client.force_login(rehab)
@@ -384,14 +384,10 @@ class TestPrescriptionScreens:
             client.get(
                 reverse("programs:prescription_edit", args=[program.pk, item.pk])
             ).status_code
-            == 403
+            == 200
         )
-        assert (
-            client.post(
-                reverse("programs:prescription_delete", args=[program.pk, item.pk])
-            ).status_code
-            == 403
-        )
+        client.post(reverse("programs:prescription_delete", args=[program.pk, item.pk]))
+        assert not program.prescriptions.exists()
 
     def test_search_uses_program_department(
         self, client, make_user, department, other_department, procedures
