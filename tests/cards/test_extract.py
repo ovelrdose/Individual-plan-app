@@ -9,7 +9,6 @@ from apps.cards.xlsx.extract import (
     column_width,
     data_cells,
     extract_templates,
-    move_back_text,
     print_scale,
 )
 
@@ -31,17 +30,16 @@ def assert_clean_template(path: Path, shrm: int) -> None:
 
 
 def assert_two_sided(sheet, shrm: int) -> None:
-    """Лицевая сторона — расписание и шапка, оборотная — «Уважаемый пациент!» и даты."""
-    last_schedule_row = MAPPINGS[shrm].schedule.last_row
-    assert [b.id for b in sheet.row_breaks.brk] == [last_schedule_row]
+    """Лицевая сторона — расписание, шапка и «Уважаемый пациент!», оборотная — таблица дат."""
+    front_last_row = MAPPINGS[shrm].date_blocks[0].date_row - 1
+    assert [b.id for b in sheet.row_breaks.brk] == [front_last_row]
     # «Вписать в страницу» Excel применяет без ручных разрывов — масштаб числом.
     assert not sheet.sheet_properties.pageSetUpPr.fitToPage
     assert 30 <= sheet.page_setup.scale <= 100
     assert sheet.page_setup.orientation == "landscape"
     assert int(sheet.page_setup.paperSize) == int(sheet.PAPERSIZE_A4)
-    front = [c.value for row in sheet.iter_rows(max_row=last_schedule_row) for c in row]
-    assert "Уважаемый пациент!" not in front
-    assert sheet[f"K{last_schedule_row + 1}"].value == "Уважаемый пациент!"
+    front = [c.value for row in sheet.iter_rows(max_row=front_last_row) for c in row]
+    assert "Уважаемый пациент!" in front
     # Перекрывающиеся описания колонок Excel читает непредсказуемо.
     covered: set[int] = set()
     for dim in sheet.column_dimensions.values():
@@ -86,13 +84,3 @@ def test_print_scale_fits_tallest_page():
     assert one_page == 100, "маленькая карта не увеличивается"
     # 30 строк по 30 пт = 900 пт на странице высотой 595 − 29 пт.
     assert two_pages == int((595 - 0.4 * 72) / 900 * 0.92 * 100)
-
-
-def test_move_back_text_refuses_to_overwrite():
-    sheet = Workbook().active
-    mapping = MAPPINGS[4]
-    sheet["K13"] = "Уважаемый пациент!"
-    sheet["K16"] = "мешает"
-
-    with pytest.raises(ValueError, match="не пустая"):
-        move_back_text(sheet, mapping)

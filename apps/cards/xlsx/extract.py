@@ -3,7 +3,7 @@
 Из `programm_template.xlsx` каждый лист «ШРМ N» сохраняется отдельным файлом,
 а примерные данные (пациент, врач, расписание, даты, процедуры) стираются по mapping.
 Карта печатается на двух сторонах листа А4 (TZ.md, решение 74): лицевая — расписание, логотип,
-пациент и врач; оборотная — «Уважаемый пациент!» и таблица дат.
+пациент, врач и «Уважаемый пациент!»; оборотная — таблица дат.
 """
 
 from pathlib import Path
@@ -43,7 +43,6 @@ def extract_templates(
         # В файле заказчика стоит ручной пересчёт — он «прилипает» к сеансу Excel пользователя.
         workbook.calculation.calcMode = "auto"
         clear_data(workbook.active, mapping)
-        move_back_text(workbook.active, mapping)
         set_print_layout(workbook.active, mapping)
 
         path = target_dir / TEMPLATE_FILE.format(shrm=shrm)
@@ -75,39 +74,12 @@ def clear_data(sheet: Worksheet, mapping: CardMapping) -> None:
             cell.value = None
 
 
-def move_back_text(sheet: Worksheet, mapping: CardMapping) -> None:
-    """«Уважаемый пациент!» стоит в последней строке расписания — на одной высоте с ним
-    разрыв страницы не поставить. Текст справа от расписания сдвигается на строку вниз,
-    в пустую строку над таблицей дат."""
-    area = mapping.schedule
-    first_col = column_index_from_string(area.place_col) + 1
-    first_row, last_row = area.last_row, mapping.date_blocks[0].date_row - 2
-    last_col = sheet.max_column
-    target = [sheet.cell(last_row + 1, col) for col in range(first_col, last_col + 1)]
-    if any(cell.value is not None for cell in target):
-        raise ValueError(f"Строка {last_row + 1} под текстом для пациента не пустая.")
-    merged = [
-        rng
-        for rng in sheet.merged_cells.ranges
-        if rng.min_col >= first_col and first_row <= rng.min_row <= last_row
-    ]
-    for rng in merged:
-        sheet.unmerge_cells(rng.coord)
-    sheet.move_range(
-        f"{get_column_letter(first_col)}{first_row}:{get_column_letter(last_col)}{last_row}",
-        rows=1,
-    )
-    for rng in merged:
-        rng.shift(row_shift=1)
-        sheet.merge_cells(rng.coord)
-
-
 def set_print_layout(sheet: Worksheet, mapping: CardMapping) -> None:
-    """Область печати — от A1 до правого нижнего края карты, две страницы А4: разрыв после
-    расписания. «Вписать в N страниц» Excel применяет без ручных разрывов, поэтому масштаб
+    """Область печати — от A1 до правого нижнего края карты, две страницы А4: разрыв перед
+    таблицей дат. «Вписать в N страниц» Excel применяет без ручных разрывов, поэтому масштаб
     задаётся числом — наибольший, при котором каждая сторона помещается на лист."""
     last_col, last_row = _card_bounds(sheet, mapping)
-    front_last_row = mapping.schedule.last_row
+    front_last_row = mapping.date_blocks[0].date_row - 1
     sheet.print_area = f"A1:{get_column_letter(last_col)}{last_row}"
     sheet.row_breaks = RowBreak()
     sheet.row_breaks.append(Break(id=front_last_row))

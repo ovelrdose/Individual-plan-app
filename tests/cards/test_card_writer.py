@@ -112,7 +112,9 @@ def test_template_design_is_kept(shrm):
 
     assert len(sheet._images) == 1, "логотип"
     assert sheet.print_area is not None
-    assert [b.id for b in sheet.row_breaks.brk] == [13], "две стороны листа"
+    assert [b.id for b in sheet.row_breaks.brk] == [MAPPINGS[shrm].date_blocks[0].date_row - 1], (
+        "две стороны листа: даты — на обороте"
+    )
     assert sheet.page_setup.scale is not None
     assert sheet.page_setup.orientation == "landscape"
     assert sheet["B3"].value == "Начало занятия"
