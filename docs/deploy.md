@@ -63,7 +63,7 @@ sudo install -d -o postgres -g postgres -m 700 /var/backups/omr4
 
 ## 3. Код
 
-Код должен быть закоммичен: на сервер попадает только то, что лежит в git. Сводки пациентов (`primary_docs/Svodka_*.docx`) в git не попадают — так и должно быть.
+Код должен быть закоммичен: на сервер попадает только то, что лежит в git. Каталог `primary_docs/` (исходные документы заказчика, в них есть персональные данные) в git не входит — его копируют отдельно, см. «Исходные документы заказчика» ниже.
 
 **Вариант А — с GitHub** (у ВМ есть доступ, на GitHub добавлен deploy key):
 
@@ -82,6 +82,24 @@ scp omr4-app.tar.gz admin@omr4.clinic.local:/tmp/
 sudo -u omr4 mkdir /opt/omr4/app
 sudo -u omr4 tar -xzf /tmp/omr4-app.tar.gz -C /opt/omr4/app
 ```
+
+### Исходные документы заказчика (`primary_docs/`)
+
+Нужны только командам загрузки: `load_initial_catalog` (`lfk.xlsx`, `basseyn.xlsx`, `Gruppy_DS.xlsx`), `load_board_instructors` (`instructions_schedule.xlsx`), `load_current_patients` (`Svodka_*.docx`) и `extract_card_templates` (`programm_template.xlsx`). Работающему сервису они не нужны: справочники уже в базе, шаблоны карт лежат в коде. Если база переносится копией (шаг 7) и команды загрузки на сервере не запускаются, этот шаг можно пропустить.
+
+```bash
+# на машине разработки
+tar -czf primary_docs.tar.gz primary_docs
+scp primary_docs.tar.gz admin@omr4.clinic.local:/tmp/
+shred -u primary_docs.tar.gz
+
+# на сервере
+sudo -u omr4 tar -xzf /tmp/primary_docs.tar.gz -C /opt/omr4/app
+sudo chmod -R go-rwx /opt/omr4/app/primary_docs     # персональные данные — только пользователю omr4
+sudo shred -u /tmp/primary_docs.tar.gz
+```
+
+Каталог в `.gitignore`, поэтому `git pull` его не трогает. Исключение — первое обновление с версии, где `primary_docs/` ещё лежал в git: pull удалит файлы, которые раньше были в репозитории. Тогда после pull скопируйте каталог заново.
 
 ## 4. PostgreSQL
 
@@ -187,10 +205,10 @@ sudo -u omr4 /opt/omr4/venv/bin/python manage.py changepassword admin
 cd /opt/omr4/app
 PY="sudo -u omr4 /opt/omr4/venv/bin/python manage.py"
 $PY migrate
-$PY load_initial_catalog                                   # справочники из primary_docs/*.xlsx
+$PY load_initial_catalog                                   # справочники из primary_docs/*.xlsx (шаг 3)
 $PY create_users                                           # врач, специалист ФР, администратор
 $PY load_board_instructors --since 2026-09-01 --replace    # инструкторы, пары, распорядок
-# Текущие пациенты — сводки положить в primary_docs/ (их нет в git), затем:
+# Текущие пациенты — сводки Svodka_*.docx в primary_docs/, затем:
 $PY load_current_patients                                  # только на сегодня/следующий будний день
 $PY collectstatic --noinput
 ```

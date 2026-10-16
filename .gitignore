@@ -10,9 +10,7 @@ htmlcov/
 /staticfiles/
 /out/
 .claude
-/primary_docs/test_list/
 
-# Сводки пациентов постов (ФИО, ИБ, диагнозы) и снимок расписания с фамилиями пациентов —
-# только на машине, в репозиторий не попадают.
-primary_docs/Svodka_*.docx
-primary_docs/planomr4.jpg
+# Только локально: инструкции для Claude Code и исходные документы заказчика (есть персональные данные).
+/CLAUDE.md
+/primary_docs/
