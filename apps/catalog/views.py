@@ -16,5 +16,8 @@ def procedure_search(request: HttpRequest) -> HttpResponse:
         department = get_department_or_404(request.user, department_id)
     else:
         department = current_department(request)
-    procedures = search_procedures(department, request.GET.get("q", "")) if department else []
-    return render(request, "catalog/_procedure_search.html", {"procedures": procedures})
+    query = request.GET.get("q", "")
+    procedures = search_procedures(department, query) if department else []
+    return render(
+        request, "catalog/_procedure_search.html", {"procedures": procedures, "query": query}
+    )

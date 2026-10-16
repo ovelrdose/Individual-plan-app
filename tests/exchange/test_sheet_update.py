@@ -244,7 +244,7 @@ class TestScreens:
 
         response = client.post(
             reverse("exchange:sheet_update", args=[program.pk]),
-            {"file": SimpleUploadedFile("лист.doc", b"x")},
+            {"file": SimpleUploadedFile("лист.pdf", b"x")},
         )
 
         assert response.status_code == 200

@@ -77,6 +77,8 @@ def _fill_header(sheet: Worksheet, mapping: CardMapping, data: CardData) -> None
     sheet[mapping.department] = data.department
     sheet[mapping.full_name] = data.full_name
     parts = [sex_age_text(data.sex, data.age)]
+    if data.room:
+        parts.append(f"палата {data.room}")
     if data.withdrawn_on is not None:
         parts.append(f"выбыл {data.withdrawn_on:%d.%m}")
     sheet[mapping.sex_age] = ", ".join(part for part in parts if part)

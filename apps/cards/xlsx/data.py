@@ -49,3 +49,5 @@ class CardData:
     rest_dates: frozenset[date] = frozenset()
     # Пациент выбыл — «выбыл ДД.ММ» в строке пола и возраста (FR-PRG-9).
     withdrawn_on: date | None = None
+    # Палата — в той же строке: «(Ж) 40 лет, палата 5а» (обратная связь по прототипу, 16.10).
+    room: str = ""

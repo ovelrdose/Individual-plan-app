@@ -33,6 +33,7 @@ def build_card_data(program: Program) -> CardData:
             | {day for day in program.course_dates() if program.is_absent(day)}
         ),
         withdrawn_on=program.withdrawal.date_from if program.withdrawal else None,
+        room=program.room,
         # Верхний блок «Расписание занятий» — типичный день по сетке слотов, с окнами (FR-CRD-2).
         schedule=tuple(
             ScheduleItem(time(row.start // 60, row.start % 60), row.label, row.place)

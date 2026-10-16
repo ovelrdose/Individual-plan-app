@@ -39,6 +39,10 @@ sudo apt install -y \
     postgresql-16 postgresql-client-16 \
     nginx \
     git openssl ca-certificates tzdata
+# LibreOffice без графики — только чтобы читать листы назначений в старом формате .doc
+# (apps/exchange/word_doc.py пересохраняет их в .docx). Без него .doc не загрузится,
+# врач увидит просьбу сохранить файл как .docx; всё остальное работает.
+sudo apt install -y --no-install-recommends libreoffice-writer-nogui
 
 # Часовой пояс системы = TIME_ZONE в .env: «сегодня» в расписании считается по нему.
 sudo timedatectl set-timezone Europe/Moscow
@@ -287,6 +291,8 @@ sudo systemctl restart omr4
 ```
 
 Открытые вкладки переподключатся сами через несколько секунд.
+
+Если сервер ставился до поддержки `.doc` (16.10.2026), один раз доустановите LibreOffice: `sudo apt install -y --no-install-recommends libreoffice-writer-nogui`. Проверка: `soffice --version`.
 
 ## Без интернета
 

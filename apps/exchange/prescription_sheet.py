@@ -1,4 +1,4 @@
-"""Разбор листа назначений врача (.docx) — TZ.md §6.1. Без Django.
+"""Разбор листа назначений врача (.docx, .doc — через word_doc) — TZ.md §6.1. Без Django.
 
 Берём только то, что нужно программе: шапку, колонку «Физиотерапия» с датами и строку
 консультаций из колонки «Диагностические назначения». Лекарства и анализы не читаем.
@@ -18,6 +18,8 @@ from docx import Document
 from docx.opc.exceptions import PackageNotFoundError
 from docx.table import Table, _Cell
 from lxml.etree import XMLSyntaxError
+
+from .word_doc import OLE_SIGNATURE, WordConvertError, doc_to_docx, is_word97
 
 
 class SheetError(ValueError):
@@ -129,11 +131,19 @@ MAX_PER_DAY = 10
 
 
 def parse_sheet(file: BinaryIO) -> Sheet:
+    """Разбирает лист .docx; старый .doc сначала пересохраняется в .docx (word_doc)."""
+    head = file.read(len(OLE_SIGNATURE))
+    file.seek(0)
+    if is_word97(head):
+        try:
+            file = doc_to_docx(file.read())
+        except WordConvertError as error:
+            raise SheetError(str(error)) from error
     try:
         document = Document(file)
-    # Переименованный .doc, архив с битым XML и т. п. — врачу нужен понятный ответ, а не 500.
+    # Архив с битым XML, .xls под видом листа и т. п. — врачу нужен понятный ответ, а не 500.
     except (PackageNotFoundError, BadZipFile, XMLSyntaxError, KeyError, ValueError) as error:
-        raise SheetError("Файл не читается как документ Word (.docx).") from error
+        raise SheetError("Файл не читается как документ Word (.docx или .doc).") from error
 
     # Шапку иногда оформляют таблицей — тогда ищем её и в ячейках.
     texts = [_clean(p.text) for p in document.paragraphs]

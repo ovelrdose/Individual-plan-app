@@ -17,7 +17,7 @@ from apps.exchange.services import (
 )
 from apps.exchange.views import PENDING_KEY
 from apps.programs.models import Program, ProgramSource
-from tests.sheets import make_sheet
+from tests.sheets import make_doc_sheet, make_sheet
 
 pytestmark = pytest.mark.usefixtures("full_catalog")
 
@@ -257,10 +257,22 @@ class TestImportScreens:
         assert "Программа создана из листа назначений" in detail
         assert "Психолог" in detail
 
+    def test_upload_old_word(self, client, doctor):
+        """Старый .doc читается так же, как .docx."""
+        client.force_login(doctor)
+        file = SimpleUploadedFile("лист.doc", make_doc_sheet(room="12б").getvalue())
+
+        response = client.post(self.url, {"file": file})
+
+        program = Program.objects.get()
+        assert response.url == reverse("programs:detail", args=[program.pk])
+        assert program.room == "12б"
+
     @pytest.mark.parametrize(
         ("file", "message"),
         [
-            (SimpleUploadedFile("лист.doc", b"x"), "в формате .docx"),
+            (SimpleUploadedFile("лист.pdf", b"x"), "в формате .docx или .doc"),
+            (SimpleUploadedFile("лист.doc", b"x"), "не читается"),
             (SimpleUploadedFile("лист.docx", b"not a zip"), "не читается"),
             (
                 SimpleUploadedFile("лист.docx", make_sheet(with_table=False).getvalue()),

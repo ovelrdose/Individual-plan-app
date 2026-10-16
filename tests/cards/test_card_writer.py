@@ -207,3 +207,17 @@ def test_withdrawn_note_after_sex_and_age():
     sheet = render(4, data)
     value = sheet[MAPPINGS[4].sex_age].value
     assert value.startswith(f"({data.sex}) {data.age} ") and value.endswith(", выбыл 07.10")
+
+
+@pytest.mark.parametrize(
+    ("room", "withdrawn_on", "expected"),
+    [
+        ("5а", None, "(Ж) 40 лет, палата 5а"),
+        ("5а", date(2026, 10, 7), "(Ж) 40 лет, палата 5а, выбыл 07.10"),
+        ("", None, "(Ж) 40 лет"),
+    ],
+)
+def test_room_in_sex_age_line(room, withdrawn_on, expected):
+    """Палата — в строке пола и возраста, перед отметкой о выбытии."""
+    data = replace(sample_card(4), sex="Ж", age=40, room=room, withdrawn_on=withdrawn_on)
+    assert render(4, data)[MAPPINGS[4].sex_age].value == expected

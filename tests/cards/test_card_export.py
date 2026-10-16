@@ -112,7 +112,7 @@ def test_download(client, doctor, program):
     assert "filename*=UTF-8''%D0%9F" in response["Content-Disposition"]
     sheet = load_workbook(BytesIO(response.content)).active
     assert sheet["I10"].value == "Тестов Тест Тестович"
-    assert sheet["I11"].value == "(Ж) 17 лет"
+    assert sheet["I11"].value == "(Ж) 17 лет, палата 9"
     assert isinstance(sheet["C17"].value, datetime)
     assert [sheet["A18"].value, sheet["A19"].value, sheet["A20"].value] == [
         "Группа Эрго общая",
@@ -185,7 +185,7 @@ class TestCardAfterImport:
         sheet = load_workbook(BytesIO(response.content)).active
         name, sex_age, doc, dept, date_row, first_row = CELLS[shrm]
         assert sheet[name].value == "Тестова Анна Сергеевна"
-        assert sheet[sex_age].value == "(Ж)"
+        assert sheet[sex_age].value == "(Ж), палата 5а"
         assert sheet[doc].value == "Иванова А.А."
         assert sheet[dept].value == "ОМР № 4"
 

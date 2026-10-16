@@ -27,14 +27,14 @@ class SheetFileForm(BootstrapFormMixin, forms.Form):
     """Только файл листа — для обновления программы из новой версии (FR-IMP-15)."""
 
     file = forms.FileField(
-        label="Лист назначений (.docx)",
-        widget=forms.ClearableFileInput(attrs={"accept": ".docx"}),
+        label="Лист назначений (.docx или .doc)",
+        widget=forms.ClearableFileInput(attrs={"accept": ".docx,.doc"}),
     )
 
     def clean_file(self):
         file = self.cleaned_data["file"]
-        if Path(file.name).suffix.lower() != ".docx":
-            raise forms.ValidationError("Нужен файл Word в формате .docx.")
+        if Path(file.name).suffix.lower() not in (".docx", ".doc"):
+            raise forms.ValidationError("Нужен файл Word в формате .docx или .doc.")
         if file.size > MAX_FILE_SIZE:
             raise forms.ValidationError("Файл больше 5 МБ — это не похоже на лист назначений.")
         return file
