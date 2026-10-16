@@ -23,13 +23,18 @@
           <div x-show="id && label" class="input-group">
             <span class="form-control bg-success-subtle" x-text="label"></span>
             <button type="button" class="btn btn-outline-secondary" title="Выбрать другую"
-                    @click="id = ''; label = ''; $nextTick(() => $refs.search.focus())"><i class="bi bi-x-lg"></i></button>
+                    @click="id = ''; label = ''; $refs.search.value = ''; $nextTick(() => $refs.search.focus())"><i class="bi bi-x-lg"></i></button>
           </div>
+          {# hx-swap задан явно: от формы наследуется outerHTML, и первый ответ заменял бы сам список — #}
+          {# следующим запросам некуда было вставлять подсказки. Enter выбирает первую подсказку к введённому (не к прошлому) тексту, а не отправляет форму. #}
           <input type="search" id="procedure-search" name="q" class="form-control" x-ref="search"
                  x-show="!(id && label)" placeholder="Название или синоним, например «st150»" autocomplete="off"
                  {% if not form.procedure_id %}autofocus{% endif %}
                  hx-get="{% url 'catalog:procedure_search' %}?department={{ program.department_id }}"
-                 hx-trigger="input changed delay:250ms, focus" hx-target="#procedure-results" @focus="open = true">
+                 hx-trigger="input changed delay:250ms, focus" hx-target="#procedure-results" hx-swap="innerHTML"
+                 hx-sync="this:replace" @focus="open = true" @input="open = true"
+                 @keydown.enter.prevent="const first = $el.closest('form').querySelector('#procedure-results [data-id]');
+                                         if (first && first.dataset.query === $el.value) first.click()">
           <div id="procedure-results" class="list-group position-absolute w-100 shadow-sm" style="z-index: 10"
                x-show="open && !(id && label)" @click.outside="open = false"></div>
           {% for error in form.procedure.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}

@@ -113,7 +113,8 @@ apps/
                      manual.py — правка групп и тренажёров, board.py — шахматка, board_days.py —
                      шахматки по дням, staff_changes.py — «Не распределены» при болезни/блоке,
                      reports.py — загрузка
-  exchange/          импорт: prescription_sheet.py (разбор .docx, без Django), matching.py (сопоставление
+  exchange/          импорт: prescription_sheet.py (разбор .docx, без Django), word_doc.py (.doc →
+                     .docx через LibreOffice, без Django), matching.py (сопоставление
                      со справочником, без Django), services.py (создание программы из листа)
   common/            общие формы (BootstrapFormMixin, DateInput)
   live/              обновление в реальном времени: events.py (publish → NOTIFY после фиксации,
