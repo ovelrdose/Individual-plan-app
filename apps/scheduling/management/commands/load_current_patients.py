@@ -29,7 +29,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import transaction
 
-from apps.accounts.models import Membership, Role, User
+from apps.accounts.models import Membership, User
 from apps.catalog.domain import add_minutes
 from apps.catalog.models import Equipment, GroupSession, InstructorSlot, Procedure
 from apps.exchange.patient_summary import SummaryError, SummaryPatient, read_summary
@@ -361,9 +361,10 @@ class Command(BaseCommand):
                     user.set_unusable_password()
                     user.save()
                     self.stdout.write(f"Врач {name}: пользователь {user.username} без пароля")
-            Membership.objects.get_or_create(
-                user=user, department=department, defaults={"role": Role.DOCTOR}
-            )
+            if not user.is_attending_doctor:
+                user.is_attending_doctor = True
+                user.save()
+            Membership.objects.get_or_create(user=user, department=department)
             result[name] = user
         return result
 

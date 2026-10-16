@@ -4,7 +4,7 @@ import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import Http404
 
-from apps.accounts.models import Role
+from apps.accounts.models import Preset
 from apps.programs import services
 from apps.programs.models import Prescription, Program
 from apps.programs.services import Period, ProgramsError, Sort
@@ -105,7 +105,7 @@ class TestRights:
         self, make_program, make_user, procedures, department, other_department
     ):
         program = make_program()
-        stranger = make_user("stranger", (other_department, Role.REHAB))
+        stranger = make_user("stranger", (other_department, Preset.REHAB))
 
         with pytest.raises(PermissionDenied):
             services.save_program(stranger, program, end_date_changed=False)
@@ -121,7 +121,7 @@ class TestRights:
             make_program(attending_doctor=rehab)
 
     def test_foreign_program_is_404(self, make_program, make_user, other_department):
-        stranger = make_user("stranger", (other_department, Role.DOCTOR))
+        stranger = make_user("stranger", (other_department, Preset.DOCTOR))
 
         with pytest.raises(Http404):
             services.get_program_or_404(stranger, make_program().pk)
@@ -156,7 +156,9 @@ class TestList:
         assert counts == {"Гамма Г.Г.": 1, "Бета Б.Б.": 0}
 
     def test_sort_by_columns(self, make_program, make_user, doctor, department):
-        other = make_user("other", (department, Role.DOCTOR), last_name="Яковлева", first_name="Я")
+        other = make_user(
+            "other", (department, Preset.DOCTOR), last_name="Яковлева", first_name="Я"
+        )
         make_program(full_name="Яшин Я.Я.", room="12", shrm=3, start_date=date(2026, 10, 3))
         make_program(
             full_name="ёлкин Ё.Ё.", room="5а", shrm=5, start_date=date(2026, 10, 1),
@@ -184,7 +186,7 @@ class TestList:
         self, make_program, make_user, other_department, department
     ):
         make_program()
-        stranger = make_user("stranger", (other_department, Role.DOCTOR))
+        stranger = make_user("stranger", (other_department, Preset.DOCTOR))
 
         assert services.programs_for(stranger, department) == []
 

@@ -14,8 +14,8 @@ from datetime import date, time
 
 from django.db import IntegrityError, transaction
 
-from apps.accounts.access import has_role
-from apps.accounts.models import Role, User
+from apps.accounts.access import has_right
+from apps.accounts.models import Right, User
 from apps.catalog.domain import add_minutes
 from apps.catalog.models import Equipment, GroupSession, InstructorSlot, ProcedureKind
 from apps.programs.models import Prescription, Program
@@ -62,13 +62,13 @@ class EditResult:
 
 
 def can_edit(user: User, program: Program) -> bool:
-    """Расписание программы правит специалист ФР её отделения и администратор (решение 37)."""
-    return has_role(user, program.department, Role.REHAB)
+    """Расписание программы — право «Расписание пациентов» в её отделении (решения 37, 79)."""
+    return has_right(user, Right.SCHEDULE, program.department)
 
 
 def require_edit(user: User, program: Program) -> None:
     if not can_edit(user, program):
-        raise EditError("Расписание правит специалист ФР отделения пациента.")
+        raise EditError("Нет права править расписание пациентов этого отделения.")
 
 
 def lock_program(program: Program) -> Program:

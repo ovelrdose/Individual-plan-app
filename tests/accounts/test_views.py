@@ -3,25 +3,25 @@ from django.core.management import CommandError, call_command
 from django.urls import reverse
 
 from apps.accounts.access import SESSION_DEPARTMENT_KEY
-from apps.accounts.models import Membership, Role, User
+from apps.accounts.models import Membership, Preset, Right, User
 from apps.org.models import Department
 from tests.conftest import PASSWORD
 
 
 @pytest.fixture
 def two_department_user(make_user, department, other_department):
-    return make_user("both", (department, Role.DOCTOR), (other_department, Role.REHAB))
+    return make_user("both", (department, Preset.DOCTOR), (other_department, Preset.REHAB))
 
 
 class TestHome:
-    def test_shows_department_and_role(self, client, doctor):
+    def test_shows_department(self, client, doctor):
         client.force_login(doctor)
 
         html = client.get(reverse("home"), follow=True).content.decode()
 
         assert "ОМР № 4" in html
         assert "Иванова А.А." in html
-        assert "Врач" in html
+        assert "Пользователи" not in html, "без права — без пункта меню"
         assert 'name="department"' not in html, "одно отделение — без переключателя"
 
     def test_without_departments(self, client, make_user):
@@ -58,7 +58,7 @@ class TestSwitchDepartment:
 
         assert response.status_code == 302
         assert client.session[SESSION_DEPARTMENT_KEY] == other_department.pk
-        assert "Специалист ФР" in client.get(reverse("home"), follow=True).content.decode()
+        assert "ОМР № 1" in client.get(reverse("home"), follow=True).content.decode()
 
     def test_foreign_is_404(self, client, doctor, other_department):
         client.force_login(doctor)
@@ -138,6 +138,8 @@ class TestSeedDev:
 
         assert Department.objects.filter(code="omr4").count() == 1
         assert User.objects.get(username="admin").is_superuser
-        assert Membership.objects.get(user__username="doctor").role == Role.DOCTOR
-        assert Membership.objects.get(user__username="rehab").role == Role.REHAB
+        doctor, rehab = User.objects.get(username="doctor"), User.objects.get(username="rehab")
+        assert Membership.objects.filter(user__in=[doctor, rehab]).count() == 2
+        assert doctor.is_attending_doctor and Right.SCHEDULE not in doctor.rights
+        assert rehab.is_staff and Right.SCHEDULE in rehab.rights
         assert User.objects.get(username="doctor").check_password("x-pass-123")

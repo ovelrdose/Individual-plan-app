@@ -8,7 +8,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from openpyxl import load_workbook
 
-from apps.accounts.models import Role
+from apps.accounts.models import Preset
 from apps.cards.models import CardExport
 from apps.cards.services import build_card_data, card_filename, choose_template, export_card
 from apps.cards.xlsx.writer import CardRenderError
@@ -128,7 +128,7 @@ def test_rehab_can_download_stranger_cannot(client, rehab, make_user, other_depa
     client.force_login(rehab)
     assert client.get(reverse("cards:download", args=[program.pk])).status_code == 200
 
-    client.force_login(make_user("stranger", (other_department, Role.DOCTOR)))
+    client.force_login(make_user("stranger", (other_department, Preset.DOCTOR)))
     assert client.get(reverse("cards:download", args=[program.pk])).status_code == 404
 
 

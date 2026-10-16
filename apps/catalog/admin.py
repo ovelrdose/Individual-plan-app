@@ -5,6 +5,7 @@ from django.db.models import Q
 from simple_history.admin import SimpleHistoryAdmin
 
 from apps.accounts.access import departments_for, is_admin
+from apps.accounts.admin_access import RightAdminMixin
 from apps.scheduling.services import replan_for_equipment, replan_for_group
 
 from .models import SESSION_KINDS, Equipment, GroupSession, InstructorSlot, Procedure
@@ -47,14 +48,14 @@ class ProcedureForm(forms.ModelForm):
         ]
 
 
-class GroupSessionInline(admin.TabularInline):
+class GroupSessionInline(RightAdminMixin, admin.TabularInline):
     model = GroupSession
     extra = 0
     fields = ["start_time", "duration_min", "place", "is_active"]
 
 
 @admin.register(Procedure)
-class ProcedureAdmin(SimpleHistoryAdmin):
+class ProcedureAdmin(RightAdminMixin, SimpleHistoryAdmin):
     form = ProcedureForm
     inlines = [GroupSessionInline]
     list_display = [
@@ -104,7 +105,7 @@ class ProcedureAdmin(SimpleHistoryAdmin):
 
 
 @admin.register(GroupSession)
-class GroupSessionAdmin(SimpleHistoryAdmin):
+class GroupSessionAdmin(RightAdminMixin, SimpleHistoryAdmin):
     list_display = ["start_time", "procedure", "duration_min", "place", "is_active"]
     list_filter = ["procedure__kind", "is_active"]
     search_fields = ["procedure__name"]
@@ -138,7 +139,7 @@ class GroupSessionAdmin(SimpleHistoryAdmin):
 
 
 @admin.register(Equipment)
-class EquipmentAdmin(SimpleHistoryAdmin):
+class EquipmentAdmin(RightAdminMixin, SimpleHistoryAdmin):
     list_display = [
         "name",
         "window_start",
@@ -158,6 +159,8 @@ class EquipmentAdmin(SimpleHistoryAdmin):
 
 
 @admin.register(InstructorSlot)
-class InstructorSlotAdmin(SimpleHistoryAdmin):
+class InstructorSlotAdmin(RightAdminMixin, SimpleHistoryAdmin):
+    # Сетка слотов задаёт шахматку — её меняет только суперпользователь.
+    read_only = True
     list_display = ["__str__", "start", "end", "is_evening"]
     list_filter = ["is_evening"]

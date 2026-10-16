@@ -3,8 +3,7 @@ from io import StringIO
 import pytest
 from django.core.management import CommandError, call_command
 
-from apps.accounts.admin_access import REHAB_GROUP
-from apps.accounts.models import Membership, Role, User
+from apps.accounts.models import PRESET_RIGHTS, Membership, Preset, User
 from apps.org.models import Department
 
 PASSWORD = "Reabilitaciya-2026"
@@ -25,17 +24,19 @@ class TestCreateUsers:
         doctor, rehab, admin = (
             User.objects.get(username=name) for name in ("doctor", "rehab", "admin")
         )
-        assert Membership.objects.get(user=doctor).role == Role.DOCTOR
-        assert Membership.objects.get(user=rehab, department=department).role == Role.REHAB
+        assert Membership.objects.filter(user=doctor, department=department).exists()
+        assert Membership.objects.filter(user=rehab, department=department).exists()
+        assert doctor.is_attending_doctor and not rehab.is_attending_doctor
+        assert rehab.rights == [right.value for right in PRESET_RIGHTS[Preset.REHAB]]
         assert not admin.memberships.exists() and admin.is_superuser and admin.is_staff
         assert all(u.check_password(PASSWORD) for u in (doctor, rehab, admin))
 
-    def test_admin_access_follows_roles(self):
+    def test_admin_access_follows_rights(self):
         run("--password", PASSWORD)
 
         rehab = User.objects.get(username="rehab")
         doctor = User.objects.get(username="doctor")
-        assert rehab.is_staff and rehab.groups.filter(name=REHAB_GROUP).exists()
+        assert rehab.is_staff and not rehab.groups.exists()
         assert not doctor.is_staff
 
     def test_custom_logins_and_names(self):

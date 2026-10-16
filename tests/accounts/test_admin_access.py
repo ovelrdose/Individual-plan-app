@@ -3,51 +3,51 @@ from datetime import time
 import pytest
 from django.urls import reverse
 
-from apps.accounts.admin_access import REHAB_GROUP, sync_admin_access
-from apps.accounts.models import Membership, Role, User
+from apps.accounts.models import Preset, Right, User
 from apps.cards.models import CardExport
 from apps.catalog.models import Procedure, ProcedureKind
 
 
-def group_names(user):
-    return set(user.groups.values_list("name", flat=True))
+class TestStaffFlag:
+    """Вход в админку — по правам «Справочники» и «Пользователи и отделения» (решение 79)."""
 
-
-class TestSync:
-    def test_rehab_gets_admin(self, rehab):
+    def test_rehab_gets_admin_without_groups(self, rehab):
         rehab.refresh_from_db()
 
         assert rehab.is_staff
-        assert group_names(rehab) == {REHAB_GROUP}
-        assert rehab.has_perm("catalog.change_procedure")
-        assert rehab.has_perm("staff.add_instructor")
-        assert not rehab.has_perm("catalog.delete_procedure")
-        assert not rehab.has_perm("catalog.change_instructorslot")
-        assert not rehab.has_perm("org.change_department")
+        assert not rehab.groups.exists() and not rehab.user_permissions.exists()
 
     def test_doctor_has_no_admin(self, doctor):
         doctor.refresh_from_db()
 
         assert not doctor.is_staff
-        assert group_names(doctor) == set()
 
-    def test_losing_rehab_role_revokes(self, rehab):
-        Membership.objects.filter(user=rehab).delete()
+    @pytest.mark.parametrize(
+        ("rights", "staff"),
+        [([], False), ([Right.SCHEDULE], False), ([Right.CATALOG], True), ([Right.USERS], True)],
+    )
+    def test_follows_rights_on_save(self, rehab, rights, staff):
+        rehab.rights = rights
+        rehab.save()
         rehab.refresh_from_db()
 
-        assert not rehab.is_staff
-        assert group_names(rehab) == set()
+        assert rehab.is_staff is staff
 
-    def test_role_change_to_doctor_revokes(self, rehab):
-        membership = Membership.objects.get(user=rehab)
-        membership.role = Role.DOCTOR
-        membership.save()
-        rehab.refresh_from_db()
+    def test_manual_flag_is_overwritten(self, doctor):
+        doctor.is_staff = True
+        doctor.save()
+        doctor.refresh_from_db()
 
-        assert not rehab.is_staff
+        assert not doctor.is_staff
+
+    def test_superuser_opens_user_in_admin(self, client, admin_user, doctor):
+        client.force_login(admin_user)
+
+        url = reverse("admin:accounts_user_change", args=[doctor.pk])
+        assert client.get(url).status_code == 200
 
     def test_superuser_stays_staff(self, admin_user):
-        sync_admin_access(admin_user)
+        admin_user.save()
 
         assert admin_user.is_staff
 
@@ -61,6 +61,21 @@ class TestRehabInAdmin:
         assert client.get(reverse("admin:catalog_instructorslot_changelist")).status_code == 200
         assert client.get(reverse("admin:org_department_changelist")).status_code == 403
         assert client.get(reverse("admin:accounts_user_changelist")).status_code == 403
+        url = reverse(
+            "admin:catalog_procedure_delete",
+            args=[
+                Procedure.objects.create(name="X", card_label="X", kind=ProcedureKind.CARD_ONLY).pk
+            ],
+        )
+        assert client.get(url).status_code == 403, "удаление — только у суперпользователя"
+        assert client.post(reverse("admin:catalog_instructorslot_add")).status_code == 403
+
+    def test_users_right_opens_departments(self, client, make_user, department):
+        boss = make_user("boss", (department, Preset.DOCTOR), rights=[Right.USERS])
+        client.force_login(boss)
+
+        assert client.get(reverse("admin:org_department_changelist")).status_code == 200
+        assert client.get(reverse("admin:catalog_procedure_changelist")).status_code == 403
 
     def test_navbar_link_is_named_catalog(self, client, rehab):
         client.force_login(rehab)
@@ -176,7 +191,7 @@ class TestDeleteUsers:
         self, client, admin_user, make_user, make_program, department
     ):
         program = make_program()
-        nurse = make_user("nurse", (department, Role.REHAB))
+        nurse = make_user("nurse", (department, Preset.REHAB))
         CardExport.objects.create(program=program, user=nurse)
         client.force_login(admin_user)
 

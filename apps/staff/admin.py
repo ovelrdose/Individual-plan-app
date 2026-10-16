@@ -3,6 +3,8 @@ from django.contrib import admin
 from django.core.exceptions import ValidationError
 from simple_history.admin import SimpleHistoryAdmin
 
+from apps.accounts.admin_access import RightAdminMixin
+
 from .models import Instructor, InstructorBlock, InstructorDuty, ShiftException, ShiftPattern
 from .services import save_instructor
 
@@ -23,7 +25,7 @@ class InstructorForm(forms.ModelForm):
 
 
 @admin.register(Instructor)
-class InstructorAdmin(SimpleHistoryAdmin):
+class InstructorAdmin(RightAdminMixin, SimpleHistoryAdmin):
     form = InstructorForm
     list_display = ["short_name", "full_name", "partner", "display_order", "is_active"]
     list_editable = ["display_order"]

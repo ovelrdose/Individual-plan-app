@@ -9,7 +9,7 @@ from datetime import date, time
 import pytest
 from django.urls import reverse
 
-from apps.accounts.models import Role
+from apps.accounts.models import Preset
 from apps.programs.models import Prescription
 from apps.programs.services import add_prescription
 from apps.scheduling import board, board_days
@@ -88,9 +88,9 @@ class TestService:
 
     def test_rights(self, two, doctor, make_user, other_department):
         booking = equipment_on(two[0], TUE)
-        with pytest.raises(board.BoardError, match="специалист ФР"):
+        with pytest.raises(board.BoardError, match="Нет права"):
             board.move_equipment(doctor, booking, booking.version, time(14, 0))
-        stranger = make_user("rehab2", (other_department, Role.REHAB))
+        stranger = make_user("rehab2", (other_department, Preset.REHAB))
         with pytest.raises(board.BoardError, match="другого отделения"):
             board.move_equipment(stranger, booking, booking.version, time(14, 0))
 

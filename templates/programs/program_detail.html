@@ -49,7 +49,7 @@
         </a>
       {% endif %}
       {% if can_delete %}
-        <a href="{% url 'programs:delete' program.pk %}" class="btn btn-outline-danger" title="Только администратор">
+        <a href="{% url 'programs:delete' program.pk %}" class="btn btn-outline-danger" title="Удалить программу целиком">
           <i class="bi bi-trash"></i> Удалить
         </a>
       {% endif %}

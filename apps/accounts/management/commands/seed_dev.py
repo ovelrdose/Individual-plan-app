@@ -4,8 +4,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from apps.accounts.admin_access import sync_admin_access
-from apps.accounts.models import Membership, Role, User
+from apps.accounts.models import Membership, Preset, User
 from apps.catalog import initial_data
 from apps.catalog.models import GroupSession, InstructorSlot
 from apps.org.models import Department
@@ -19,10 +18,10 @@ from apps.staff.models import (
 from apps.staff.services import set_partner
 
 DEV_USERS = [
-    # логин, фамилия и инициалы, роль (None — администратор)
+    # логин, фамилия и инициалы, шаблон прав (None — суперпользователь)
     ("admin", "Админов А.А.", None),
-    ("doctor", "Иванова А.А.", Role.DOCTOR),
-    ("rehab", "Петрова Б.Б.", Role.REHAB),
+    ("doctor", "Иванова А.А.", Preset.DOCTOR),
+    ("rehab", "Петрова Б.Б.", Preset.REHAB),
 ]
 
 # Вымышленные инструкторы: (фамилия, ФИО, порядок). Пары — 2/2 со сдвигом на два дня.
@@ -85,20 +84,19 @@ class Command(BaseCommand):
             raise CommandError("Команда работает только при DEBUG=true.")
 
         department, _ = Department.objects.get_or_create(code="omr4", defaults={"name": "ОМР № 4"})
-        for username, short_name, role in DEV_USERS:
+        for username, short_name, preset in DEV_USERS:
             user, created = User.objects.get_or_create(
                 username=username, defaults={"short_name": short_name}
             )
             if created:
                 user.set_password(password)
-                if role is None:
-                    user.is_superuser = user.is_staff = True
+                if preset is None:
+                    user.is_superuser = True
+                else:
+                    user.apply_preset(preset)
                 user.save()
-            if role is not None:
-                Membership.objects.get_or_create(
-                    user=user, department=department, defaults={"role": role}
-                )
-            sync_admin_access(user)
+            if preset is not None:
+                Membership.objects.get_or_create(user=user, department=department)
             state = "создан" if created else "уже был"
             self.stdout.write(f"{username:8} {short_name:14} {state}")
         self.stdout.write(f"Пароль новых пользователей: {password}")

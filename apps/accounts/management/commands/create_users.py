@@ -5,7 +5,7 @@
     .venv/bin/python manage.py create_users --doctor ivanova --doctor-name 'Иванова А.А.'
 
 Отделение ОМР № 4 создаётся, если его нет. Пользователей, которые уже есть, команда не
-меняет — ни пароль, ни роль: повторный запуск безопасен. Работает и без DEBUG, в отличие от
+меняет — ни пароль, ни права: повторный запуск безопасен. Работает и без DEBUG, в отличие от
 ``seed_dev`` (там вымышленные инструкторы и общий пароль для разработки).
 """
 
@@ -18,8 +18,7 @@ from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import transaction
 
-from apps.accounts.admin_access import sync_admin_access
-from apps.accounts.models import Membership, Role, User
+from apps.accounts.models import Membership, Preset, User
 from apps.org.models import Department
 
 DEPARTMENT_CODE = "omr4"
@@ -30,14 +29,14 @@ DEPARTMENT_NAME = "ОМР № 4"
 class Account:
     key: str  # имя параметра команды
     title: str  # как назвать в выводе
-    role: Role | None  # None — администратор
+    preset: Preset | None  # None — суперпользователь
     login: str
     short_name: str
 
 
 ACCOUNTS = [
-    Account("doctor", "врач", Role.DOCTOR, "doctor", "Врач"),
-    Account("rehab", "специалист ФР", Role.REHAB, "rehab", "Специалист ФР"),
+    Account("doctor", "врач", Preset.DOCTOR, "doctor", "Врач"),
+    Account("rehab", "специалист ФР", Preset.REHAB, "rehab", "Специалист ФР"),
     Account("admin", "администратор", None, "admin", "Администратор"),
 ]
 
@@ -68,7 +67,7 @@ class Command(BaseCommand):
             Account(
                 a.key,
                 a.title,
-                a.role,
+                a.preset,
                 options[a.key].strip(),
                 options[f"{a.key}_name"].strip(),
             )
@@ -127,10 +126,11 @@ class Command(BaseCommand):
     def _create(self, account: Account, password: str, department: Department) -> None:
         user = User(username=account.login, short_name=account.short_name)
         user.set_password(password)
-        if account.role is None:
-            user.is_superuser = user.is_staff = True
+        if account.preset is None:
+            user.is_superuser = True
+        else:
+            user.apply_preset(account.preset)
+        # Вход в админку (is_staff) выставляет сигнал по правам.
         user.save()
-        if account.role is not None:
-            # Доступ специалиста ФР к справочникам в админке выставляет сигнал членства.
-            Membership.objects.create(user=user, department=department, role=account.role)
-        sync_admin_access(user)
+        if account.preset is not None:
+            Membership.objects.create(user=user, department=department)

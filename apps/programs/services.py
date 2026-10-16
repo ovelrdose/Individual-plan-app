@@ -6,11 +6,11 @@ from enum import StrEnum
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Count, Exists, Max, OuterRef, Q, QuerySet
+from django.db.models import Count, Exists, Max, OuterRef, Q
 from django.http import Http404
 
-from apps.accounts.access import departments_for, has_role, is_admin, require_role
-from apps.accounts.models import Role, User
+from apps.accounts.access import departments_for, doctors_for, has_right, require_right
+from apps.accounts.models import Right, User
 from apps.catalog.models import SCHEDULED_KINDS, ProcedureKind
 from apps.org.models import Department
 from apps.scheduling import board_days
@@ -129,25 +129,18 @@ def get_program_or_404(user: User, pk: int) -> Program:
     return program
 
 
-def doctors_for(department: Department) -> QuerySet[User]:
-    return User.objects.filter(
-        is_active=True, memberships__department=department, memberships__role=Role.DOCTOR
-    ).order_by("short_name", "last_name")
-
-
-# Кто создаёт программы (в том числе из листа назначений) и правит их данные и назначения:
-# врач и специалист ФР отделения, администратор — всегда (решение 75).
-PROGRAM_EDITORS = (Role.DOCTOR, Role.REHAB)
-
-
 def can_edit(user: User, program: Program) -> bool:
-    """Данные программы и назначения правят врач и специалист ФР отделения и администратор
-    (§3, решение 75); у выбывшего — только просмотр (FR-PRG-9)."""
-    return has_role(user, program.department, *PROGRAM_EDITORS) and program.withdrawal is None
+    """Данные программы и назначения — право «Программы: создавать и править» (решение 79);
+    у выбывшего — только просмотр (FR-PRG-9)."""
+    return has_right(user, Right.PROGRAMS_EDIT, program.department) and program.withdrawal is None
 
 
 def can_create(user: User, department: Department) -> bool:
-    return has_role(user, department, *PROGRAM_EDITORS)
+    return has_right(user, Right.PROGRAMS_EDIT, department)
+
+
+def can_delete(user: User, program: Program) -> bool:
+    return has_right(user, Right.PROGRAMS_DELETE, program.department)
 
 
 def review_items(program: Program) -> list[str]:
@@ -184,7 +177,7 @@ def save_program(user: User, program: Program, *, end_date_changed: bool) -> Pro
     пересчитывается по ШРМ и дате начала. Если врач ввёл дату, отличную от расчётной, —
     это продление или досрочное окончание, дальше она не пересчитывается.
     """
-    require_role(user, program.department, *PROGRAM_EDITORS)
+    require_right(user, Right.PROGRAMS_EDIT, program.department)
     if program.pk:
         _lock(program)
         if program.withdrawals.filter(returned_on__isnull=True).exists():
@@ -214,17 +207,17 @@ def save_program(user: User, program: Program, *, end_date_changed: bool) -> Pro
 def dismiss_warnings(user: User, program: Program) -> None:
     """Врач проверил предупреждения импорта и закрыл блок (FR-PRG-6)."""
     program = _lock(program)
-    require_role(user, program.department, *PROGRAM_EDITORS)
+    require_right(user, Right.PROGRAMS_EDIT, program.department)
     program.import_warnings = []
     _save(program, user, update_fields=["import_warnings", "updated_at"])
 
 
 @transaction.atomic
 def delete_program(user: User, program: Program) -> None:
-    """Удаление программы целиком — только администратор (решение владельца 04.10).
+    """Удаление программы целиком — право «Программы: удалять» (решение 79).
     Уходят назначения, расписание и журнал выгрузок; запись об удалении остаётся в истории."""
-    if not is_admin(user):
-        raise PermissionDenied("Удалять программы может только администратор.")
+    if not can_delete(user, program):
+        raise PermissionDenied("Нет права удалять программы.")
     program = _lock(program)
     program._history_user = user
     program.delete()
@@ -335,7 +328,7 @@ def cancel_prescription(user: User, prescription: Prescription, day: date | None
 
 
 def require_editable(user: User, program: Program) -> None:
-    require_role(user, program.department, *PROGRAM_EDITORS)
+    require_right(user, Right.PROGRAMS_EDIT, program.department)
     if program.withdrawals.filter(returned_on__isnull=True).exists():
         raise ProgramsError("Пациент выбыл — данные и назначения только для просмотра.")
 
@@ -414,15 +407,13 @@ def link_previous(user: User, program: Program, previous: Program, *, copy: bool
 
 
 def can_withdraw(user: User, program: Program) -> bool:
-    """Выбытие отмечают и снимают врач и специалист ФР отделения (решение 62)."""
-    return has_role(user, program.department, Role.DOCTOR) or has_role(
-        user, program.department, Role.REHAB
-    )
+    """Выбытие отмечают и снимают те, кто правит программы (решения 62, 79)."""
+    return has_right(user, Right.PROGRAMS_EDIT, program.department)
 
 
 def _require_withdraw(user: User, program: Program) -> None:
     if not can_withdraw(user, program):
-        raise PermissionDenied("Выбытие отмечают врач и специалист ФР отделения.")
+        raise PermissionDenied("Нет права отмечать выбытие.")
 
 
 @transaction.atomic

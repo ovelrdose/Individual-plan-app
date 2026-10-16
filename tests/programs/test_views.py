@@ -3,7 +3,7 @@ from datetime import date, time
 import pytest
 from django.urls import reverse
 
-from apps.accounts.models import Role
+from apps.accounts.models import Preset
 from apps.cards.models import CardExport
 from apps.catalog.models import GroupSession
 from apps.programs import services as programs_services
@@ -166,7 +166,7 @@ class TestProgramScreens:
 
     def test_foreign_department_is_404(self, client, make_user, other_department, make_program):
         program = make_program()
-        client.force_login(make_user("stranger", (other_department, Role.DOCTOR)))
+        client.force_login(make_user("stranger", (other_department, Preset.DOCTOR)))
 
         for name in ("programs:detail", "programs:edit"):
             assert client.get(reverse(name, args=[program.pk])).status_code == 404
@@ -415,7 +415,7 @@ class TestPrescriptionScreens:
     ):
         procedures["card_only"].department = other_department
         procedures["card_only"].save()
-        user = make_user("both", (department, Role.DOCTOR), (other_department, Role.DOCTOR))
+        user = make_user("both", (department, Preset.DOCTOR), (other_department, Preset.DOCTOR))
         client.force_login(user)
         url = reverse("catalog:procedure_search")
 
@@ -451,19 +451,37 @@ class TestDepartmentVisibility:
 class TestDeleteProgram:
     """Удаляет только администратор (TZ.md, решение 39)."""
 
-    def test_only_admin(self, client, doctor, rehab, make_program):
+    def test_only_with_delete_right(self, client, doctor, make_program):
         program = make_program()
         url = reverse("programs:delete", args=[program.pk])
+        client.force_login(doctor)
 
-        for user in (doctor, rehab):
-            client.force_login(user)
-            assert client.get(url).status_code == 403
-            assert client.post(url).status_code == 403
-            assert (
-                "Удалить"
-                not in client.get(reverse("programs:detail", args=[program.pk])).content.decode()
-            )
+        assert client.get(url).status_code == 403
+        assert client.post(url).status_code == 403
+        detail = client.get(reverse("programs:detail", args=[program.pk])).content.decode()
+        assert url not in detail
         assert Program.objects.filter(pk=program.pk).exists()
+
+    def test_rehab_deletes(self, client, rehab, make_program):
+        """Специалист ФР удаляет программы своего отделения (просьба владельца 16.10)."""
+        program = make_program()
+        url = reverse("programs:delete", args=[program.pk])
+        client.force_login(rehab)
+
+        assert url in client.get(reverse("programs:detail", args=[program.pk])).content.decode()
+        assert client.post(url).status_code == 302
+        assert not Program.objects.filter(pk=program.pk).exists()
+
+    def test_delete_right_only_in_own_department(
+        self, client, make_user, other_department, make_program
+    ):
+        stranger = make_user("stranger", (other_department, Preset.REHAB))
+        client.force_login(stranger)
+
+        response = client.post(reverse("programs:delete", args=[make_program().pk]))
+
+        assert response.status_code == 404
+        assert Program.objects.exists()
 
     def test_admin_deletes_with_everything(
         self, client, admin_user, doctor, make_program, procedures

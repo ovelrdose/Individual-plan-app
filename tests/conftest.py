@@ -2,7 +2,7 @@ from datetime import date, time
 
 import pytest
 
-from apps.accounts.models import Membership, Role, User
+from apps.accounts.models import PRESET_ATTENDING, PRESET_RIGHTS, Membership, Preset, Right, User
 from apps.catalog.models import InstructorSlot
 from apps.org.models import Department
 from apps.staff.models import Instructor, ShiftPattern
@@ -29,12 +29,20 @@ def other_department(db):
 
 @pytest.fixture
 def make_user(db):
-    """make_user("doctor", (department, Role.DOCTOR), ...) — пользователь с членством."""
+    """make_user("doctor", (department, Preset.DOCTOR), ...) — пользователь в отделениях.
 
-    def make(username: str, *memberships: tuple[Department, Role], **fields) -> User:
+    Права общие для всех отделений (решение 79): шаблоны нескольких отделений объединяются.
+    ``rights=[...]`` и ``is_attending_doctor=...`` в полях — вместо шаблонов.
+    """
+
+    def make(username: str, *memberships: tuple[Department, Preset], **fields) -> User:
+        presets = [preset for _dept, preset in memberships]
+        rights = {right for preset in presets for right in PRESET_RIGHTS[preset]}
+        fields.setdefault("rights", [right.value for right in Right if right in rights])
+        fields.setdefault("is_attending_doctor", any(PRESET_ATTENDING[p] for p in presets))
         user = User.objects.create_user(username=username, password=PASSWORD, **fields)
-        for dept, role in memberships:
-            Membership.objects.create(user=user, department=dept, role=role)
+        for dept, _preset in memberships:
+            Membership.objects.get_or_create(user=user, department=dept)
         return user
 
     return make
@@ -47,12 +55,12 @@ def admin_user(make_user):
 
 @pytest.fixture
 def doctor(make_user, department):
-    return make_user("doctor", (department, Role.DOCTOR), short_name="Иванова А.А.")
+    return make_user("doctor", (department, Preset.DOCTOR), short_name="Иванова А.А.")
 
 
 @pytest.fixture
 def rehab(make_user, department):
-    return make_user("rehab", (department, Role.REHAB), short_name="Петрова Б.Б.")
+    return make_user("rehab", (department, Preset.REHAB), short_name="Петрова Б.Б.")
 
 
 @pytest.fixture

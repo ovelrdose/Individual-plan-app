@@ -9,15 +9,14 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Exists, OuterRef
 
-from apps.accounts.access import require_role
-from apps.accounts.models import User
+from apps.accounts.access import require_right
+from apps.accounts.models import Right, User
 from apps.catalog.models import SESSION_KINDS, Procedure, ProcedureKind
 from apps.catalog.services import visible_procedures
 from apps.org.models import Department
 from apps.programs.domain import course_end, patient_key, sex_from_name
 from apps.programs.models import Prescription, Program, ProgramSource, Withdrawal
 from apps.programs.services import (
-    PROGRAM_EDITORS,
     ProgramsError,
     can_edit,
     copy_plan,
@@ -144,7 +143,7 @@ def import_prescription_sheet(
     программа (FR-IMP-11) и прошлые курсы пациента (FR-IMP-13): пока ``plan`` не выбран,
     создание останавливается с ``PreviousCoursesFound``.
     """
-    require_role(user, department, *PROGRAM_EDITORS)
+    require_right(user, Right.PROGRAMS_EDIT, department)
     warnings = list(sheet.warnings)
 
     start = sheet.start_date

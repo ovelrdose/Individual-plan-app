@@ -1,45 +1,45 @@
-"""Доступ к админке Django (TZ.md §4: справочники ведутся в админке).
+"""Доступ к админке Django (TZ.md §4: справочники ведутся в админке; решение 79).
 
-Правило одно: в админку входят администратор и специалисты ФР. Специалисту ФР выдаётся
-группа с правами на справочники групп, тренажёров и инструкторов — без удаления
-(вместо удаления у записей есть флаг «действует»). Врачу админка не нужна.
+Права Django и группы не используются: раздел админки сам проверяет право пользователя
+(`RightAdminMixin`). В админку входят суперпользователь и те, у кого есть «Справочники» или
+«Пользователи и отделения» — флаг is_staff выставляет сигнал при сохранении пользователя
+(accounts/signals.py), вручную его не ставят.
+Удаление в админке — только у суперпользователя: у записей справочников есть флаг «действует».
 """
 
-from django.contrib.auth.models import Group, Permission
-from django.db.models import Q
+from django.http import HttpRequest
 
-from .models import Role, User
+from .access import has_right
+from .models import Right, User
 
-REHAB_GROUP = "Специалист ФР"
-REHAB_PERMISSIONS = {
-    ("catalog", "procedure"): ("add", "change", "view"),
-    ("catalog", "groupsession"): ("add", "change", "view"),
-    ("catalog", "equipment"): ("add", "change", "view"),
-    ("catalog", "instructorslot"): ("view",),
-    ("staff", "instructor"): ("add", "change", "view"),
-}
+ADMIN_RIGHTS = (Right.CATALOG, Right.USERS)
 
 
-def rehab_group() -> Group:
-    group, _ = Group.objects.get_or_create(name=REHAB_GROUP)
-    condition = Q(pk__in=[])
-    for (app_label, model), actions in REHAB_PERMISSIONS.items():
-        codenames = [f"{action}_{model}" for action in actions]
-        condition |= Q(content_type__app_label=app_label, codename__in=codenames)
-    group.permissions.set(Permission.objects.filter(condition))
-    return group
+def needs_admin(user: User) -> bool:
+    """Нужен ли пользователю вход в админку."""
+    return user.is_superuser or any(right in user.rights for right in ADMIN_RIGHTS)
 
 
-def sync_admin_access(user: User) -> None:
-    """Приводит is_staff и группу пользователя в соответствие с его ролями."""
-    is_rehab = user.memberships.filter(role=Role.REHAB, department__is_active=True).exists()
-    group = rehab_group()
-    if is_rehab:
-        user.groups.add(group)
-    else:
-        user.groups.remove(group)
+class RightAdminMixin:
+    """Раздел админки доступен по праву ``right``; ``read_only`` — только просмотр."""
 
-    should_be_staff = user.is_superuser or is_rehab
-    if user.is_staff != should_be_staff:
-        user.is_staff = should_be_staff
-        user.save(update_fields=["is_staff"])
+    right: Right = Right.CATALOG
+    read_only = False
+
+    def _allowed(self, request: HttpRequest) -> bool:
+        return request.user.is_superuser or has_right(request.user, self.right)
+
+    def has_module_permission(self, request: HttpRequest) -> bool:
+        return self._allowed(request)
+
+    def has_view_permission(self, request: HttpRequest, obj=None) -> bool:
+        return self._allowed(request)
+
+    def has_add_permission(self, request: HttpRequest, *args) -> bool:
+        return request.user.is_superuser or (self._allowed(request) and not self.read_only)
+
+    def has_change_permission(self, request: HttpRequest, obj=None) -> bool:
+        return request.user.is_superuser or (self._allowed(request) and not self.read_only)
+
+    def has_delete_permission(self, request: HttpRequest, obj=None) -> bool:
+        return request.user.is_superuser

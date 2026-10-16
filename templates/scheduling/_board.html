@@ -1,6 +1,6 @@
 {% comment %}
   Шахматка на дату (FR-SCH-14): слева инструкторы по слотам, справа тренажёры; над сеткой — блоки.
-  Специалист ФР открывает ячейку кликом и перетаскивает пациентов (FR-SCH-10a, static/js/board.js).
+  Кто правит расписание, открывает ячейку кликом и перетаскивает пациентов (FR-SCH-10a, static/js/board.js).
 {% endcomment %}
 <div id="board"{% if oob %} hx-swap-oob="true"{% endif %} data-live="board:{{ board.day|date:'Y-m-d' }}"
      {% if board.can_edit %}data-date="{{ board.day|date:'Y-m-d' }}" data-place-url="{% url 'scheduling:board_place' %}"

@@ -3,24 +3,18 @@ from pathlib import Path
 from django import forms
 from django.db.models import QuerySet
 
-from apps.accounts.access import departments_for, is_admin, role_in
-from apps.accounts.models import Role, User
+from apps.accounts.access import departments_with, doctors_for, is_attending_doctor
+from apps.accounts.models import Right, User
 from apps.common.forms import BootstrapFormMixin
 from apps.org.models import Department
-from apps.programs.services import PROGRAM_EDITORS, doctors_for
 
 from .services import MAX_FILE_SIZE
 
 
 def import_departments(user: User) -> QuerySet[Department]:
-    """Отделения, куда пользователь может загрузить лист: где он врач или специалист ФР
-    (администратор — все)."""
-    departments = departments_for(user)
-    if is_admin(user):
-        return departments
-    return departments.filter(
-        memberships__user=user, memberships__role__in=PROGRAM_EDITORS
-    ).distinct()
+    """Отделения, куда пользователь может загрузить лист: право «Программы: создавать и
+    править» в его отделениях (решение 79)."""
+    return departments_with(user, Right.PROGRAMS_EDIT)
 
 
 class SheetFileForm(BootstrapFormMixin, forms.Form):
@@ -52,7 +46,7 @@ class SheetUploadForm(SheetFileForm):
         queryset=User.objects.none(),
         label="Лечащий врач",
         required=False,
-        help_text="Нужен, если загружает не врач отделения (специалист ФР, администратор).",
+        help_text="Нужен, если загружает не лечащий врач отделения.",
     )
 
     def __init__(self, *args, user: User, initial_department: Department | None, **kwargs):
@@ -73,11 +67,11 @@ class SheetUploadForm(SheetFileForm):
         if shown is not None:
             self.fields["department"].initial = shown.pk
         doctors = User.objects.filter(
-            is_active=True, memberships__department__in=departments, memberships__role=Role.DOCTOR
+            is_active=True, is_attending_doctor=True, memberships__department__in=departments
         ).distinct()
         self.fields["attending_doctor"].queryset = doctors.order_by("short_name", "last_name")
         self.fields["attending_doctor"].label_from_instance = lambda doctor: str(doctor)
-        self.needs_doctor_choice = any(role_in(user, d) != Role.DOCTOR for d in departments)
+        self.needs_doctor_choice = any(not is_attending_doctor(user, d) for d in departments)
         if not self.needs_doctor_choice:
             del self.fields["attending_doctor"]
 
@@ -91,7 +85,7 @@ class SheetUploadForm(SheetFileForm):
         if department is None:
             self.add_error("department", "Выберите отделение.")
             return cleaned
-        if role_in(self.user, department) == Role.DOCTOR:
+        if is_attending_doctor(self.user, department):
             cleaned["chosen_doctor"] = self.user
             return cleaned
         doctor = cleaned.get("attending_doctor")

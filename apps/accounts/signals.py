@@ -1,14 +1,11 @@
-from django.db.models.signals import post_delete, post_save
+from django.db.models.signals import pre_save
 from django.dispatch import receiver
 
-from .admin_access import sync_admin_access
-from .models import Membership, User
+from .admin_access import needs_admin
+from .models import User
 
 
-@receiver(post_save, sender=Membership)
-@receiver(post_delete, sender=Membership)
-def membership_changed(sender, instance: Membership, **kwargs) -> None:
-    # Членство меняют и админка, и команды — сигнал покрывает все пути.
-    user = User.objects.filter(pk=instance.user_id).first()
-    if user is not None:
-        sync_admin_access(user)
+@receiver(pre_save, sender=User)
+def staff_follows_rights(sender, instance: User, **kwargs) -> None:
+    # Пользователя сохраняют экран, админка, команды — сигнал покрывает все пути.
+    instance.is_staff = needs_admin(instance)

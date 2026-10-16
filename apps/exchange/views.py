@@ -34,7 +34,7 @@ MAX_PENDING = 5
 def sheet_import(request: HttpRequest) -> HttpResponse:
     """Загрузка листа назначений → новая программа (TZ.md §6)."""
     if not import_departments(request.user).exists():
-        raise PermissionDenied("Загружать листы назначений может врач или специалист ФР отделения.")
+        raise PermissionDenied("Нет права загружать листы назначений.")
 
     form = SheetUploadForm(
         request.POST or None,
@@ -163,7 +163,7 @@ def sheet_update(request: HttpRequest, pk: int) -> HttpResponse:
     program = get_program_or_404(request.user, pk)
     if not can_update_from_sheet(request.user, program):
         raise PermissionDenied(
-            "Обновить программу из листа может врач или специалист ФР отделения, пока идёт курс."
+            "Обновить программу из листа можно с правом править программы, пока идёт курс."
         )
     form = SheetFileForm(request.POST or None, request.FILES or None)
     if request.method == "POST" and form.is_valid():

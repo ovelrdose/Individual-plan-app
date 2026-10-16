@@ -9,8 +9,8 @@ from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Q, QuerySet
 
-from apps.accounts.access import has_role, has_role_anywhere, is_admin, require_role
-from apps.accounts.models import Role, User
+from apps.accounts.access import departments_for, has_right, is_admin, require_right
+from apps.accounts.models import Right, User
 from apps.catalog.domain import minutes_between
 from apps.catalog.models import (
     SCHEDULED_KINDS,
@@ -60,8 +60,8 @@ class ScheduleError(Exception):
 
 
 def can_schedule(user: User, program: Program) -> bool:
-    """Расписание правят специалист ФР и администратор (TZ.md §3)."""
-    return has_role(user, program.department, Role.REHAB)
+    """Расписание пациента — право «Расписание пациентов» в его отделении (решение 79)."""
+    return has_right(user, Right.SCHEDULE, program.department)
 
 
 def pool_groups() -> list[Procedure]:
@@ -83,7 +83,7 @@ def choose_pool_group(user: User, prescription: Prescription, group: Procedure |
         .select_related("department")
         .get(pk=prescription.program_id)
     )
-    require_role(user, program.department, Role.REHAB)
+    require_right(user, Right.SCHEDULE, program.department)
     prescription = (
         program.prescriptions.select_related("procedure").filter(pk=prescription.pk).first()
     )
@@ -308,27 +308,26 @@ class Rescheduled:
 
 
 def can_edit_group_schedule(user: User) -> bool:
-    """Расписание групп и окна тренажёров правят специалист ФР и администратор. Группы и
-    тренажёры — общие для центра, поэтому достаточно роли в любом отделении."""
-    return has_role_anywhere(user, Role.REHAB)
+    """Расписание групп и окна тренажёров — право «Групповые занятия». Группы и тренажёры —
+    общие для центра, отделение не нужно."""
+    return has_right(user, Right.GROUP_SCHEDULE)
 
 
 def require_group_schedule(user: User, procedure: Procedure | None = None) -> None:
     if not can_edit_group_schedule(user):
-        raise PermissionDenied("Групповые занятия правит специалист ФР.")
-    # Группа отделения — только для специалиста этого отделения (решение 3).
+        raise PermissionDenied("Нет права править групповые занятия.")
+    # Группа отделения — только для тех, кто в этом отделении работает (решение 3).
     if procedure is not None and procedure.department_id is not None:
-        require_role(user, procedure.department, Role.REHAB)
+        require_right(user, Right.GROUP_SCHEDULE, procedure.department)
 
 
 def group_schedule_procedures(user: User) -> QuerySet[Procedure]:
     """Группы, у которых специалист может править расписание."""
     groups = Procedure.objects.filter(kind__in=SESSION_KINDS, is_active=True, group_choice=False)
+    if not can_edit_group_schedule(user):
+        return groups.none()
     if not is_admin(user):
-        groups = groups.filter(
-            Q(department=None)
-            | Q(department__memberships__user=user, department__memberships__role=Role.REHAB)
-        )
+        groups = groups.filter(Q(department=None) | Q(department__in=departments_for(user)))
     return groups.distinct().order_by("kind", "name")
 
 

@@ -8,8 +8,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.views.decorators.http import require_POST
 
-from apps.accounts.access import current_department, is_admin, role_in
-from apps.accounts.models import Role
+from apps.accounts.access import current_department, is_attending_doctor
 from apps.exchange.services import can_update_from_sheet
 from apps.scheduling import board_days
 from apps.scheduling.services import can_schedule, program_schedule
@@ -72,9 +71,9 @@ def program_create(request: HttpRequest) -> HttpResponse:
     """Запасной путь — без листа назначений (FR-PRG-5)."""
     department = current_department(request)
     if department is None or not services.can_create(request.user, department):
-        raise PermissionDenied("Создавать программы может врач или специалист ФР отделения.")
+        raise PermissionDenied("Нет права создавать программы в этом отделении.")
     program = Program(department=department, start_date=date.today(), source=ProgramSource.MANUAL)
-    if role_in(request.user, department) == Role.DOCTOR:
+    if is_attending_doctor(request.user, department):
         program.attending_doctor = request.user
     return _program_form(request, program, "Новая программа вручную")
 
@@ -84,13 +83,13 @@ def program_repeat(request: HttpRequest, pk: int) -> HttpResponse:
     курс — новый, по умолчанию назначения берутся из прошлого курса."""
     previous = services.get_program_or_404(request.user, pk)
     if not services.can_create(request.user, previous.department):
-        raise PermissionDenied("Создавать программы может врач или специалист ФР отделения.")
+        raise PermissionDenied("Нет права создавать программы в этом отделении.")
     if not previous.is_finished(board_days.today()) and previous.withdrawal is None:
         messages.error(request, "Курс ещё идёт — повторный курс создаётся после его окончания.")
         return redirect("programs:detail", pk=pk)
     doctor = previous.attending_doctor
     if not services.doctors_for(previous.department).filter(pk=doctor.pk).exists():
-        doctor = request.user if role_in(request.user, previous.department) == Role.DOCTOR else None
+        doctor = request.user if is_attending_doctor(request.user, previous.department) else None
     program = Program(
         department=previous.department,
         full_name=previous.full_name,
@@ -108,7 +107,7 @@ def program_repeat(request: HttpRequest, pk: int) -> HttpResponse:
 def program_edit(request: HttpRequest, pk: int) -> HttpResponse:
     program = services.get_program_or_404(request.user, pk)
     if not services.can_edit(request.user, program):
-        raise PermissionDenied("Данные программы правит врач или специалист ФР отделения.")
+        raise PermissionDenied("Нет права править программы этого отделения.")
     return _program_form(request, program, "Данные пациента и курса")
 
 
@@ -189,7 +188,7 @@ def program_detail(request: HttpRequest, pk: int) -> HttpResponse:
             "review_items": services.review_items(program),
             "schedule": program_schedule(program),
             "can_schedule": can_schedule(request.user, program),
-            "can_delete": is_admin(request.user),
+            "can_delete": services.can_delete(request.user, program),
             "can_update_from_sheet": can_update_from_sheet(request.user, program),
             "courses": services.patient_courses(program),
             # Повторный курс — у завершённой или выбывшей программы (FR-PRG-10).
@@ -259,8 +258,8 @@ def program_restore(request: HttpRequest, pk: int) -> HttpResponse:
 
 def program_delete(request: HttpRequest, pk: int) -> HttpResponse:
     program = services.get_program_or_404(request.user, pk)
-    if not is_admin(request.user):
-        raise PermissionDenied("Удалять программы может только администратор.")
+    if not services.can_delete(request.user, program):
+        raise PermissionDenied("Нет права удалять программы.")
     if request.method == "POST":
         name = program.full_name
         services.delete_program(request.user, program)

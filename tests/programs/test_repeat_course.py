@@ -11,7 +11,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
-from apps.accounts.models import Role
+from apps.accounts.models import Preset
 from apps.exchange.prescription_sheet import parse_sheet
 from apps.exchange.services import (
     DuplicateProgramError,
@@ -119,7 +119,7 @@ class TestFindAndCopy:
         self, old, rehab, make_program, make_user, other_department
     ):
         new = make_program(full_name=NAME, start_date=date(2026, 11, 2))
-        stranger = make_user("stranger", (other_department, Role.REHAB))
+        stranger = make_user("stranger", (other_department, Preset.REHAB))
         with pytest.raises(PermissionDenied):
             services.link_previous(stranger, new, old, copy=False)
 

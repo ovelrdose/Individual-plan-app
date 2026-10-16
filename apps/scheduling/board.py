@@ -4,7 +4,7 @@
 в этот день), строки — слоты сетки. В ячейке может быть несколько пациентов. Под сеткой —
 блоки «Не распределены» и «Отменены». Справа — тренажёры по шагам окна.
 
-Правка — только специалист ФР и администратор и только сегодняшней и завтрашней шахматки.
+Правка — по праву «Расписание пациентов» и только сегодняшней и завтрашней шахматки.
 Пациент ставится, переносится и убирается через единый валидатор; правка сегодняшней
 шахматки переходит на завтрашнюю (``board_days.propagate``). Шахматка — только по будням.
 """
@@ -18,8 +18,8 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
 
-from apps.accounts.access import departments_for, has_role, has_role_anywhere
-from apps.accounts.models import Role, User
+from apps.accounts.access import departments_for, departments_with, has_right
+from apps.accounts.models import Right, User
 from apps.cards.xlsx.board import BoardCell, BoardSheet
 from apps.catalog.models import Equipment, GroupSession, InstructorSlot, ProcedureKind
 from apps.programs.domain import fold, room_sort_key
@@ -47,23 +47,24 @@ ConfirmationRequired = manual.ConfirmationRequired
 
 
 def can_edit_board(user: User) -> bool:
-    """Шахматку правят специалист ФР (в любом отделении) и администратор (TZ.md §7.6)."""
-    return has_role_anywhere(user, Role.REHAB)
+    """Шахматку правят те, у кого есть право «Расписание пациентов» (TZ.md §7.6, решение 79)."""
+    return has_right(user, Right.SCHEDULE)
 
 
 def can_edit_patient(user: User, program: Program) -> bool:
-    """Пациента ставит и убирает специалист ФР его отделения: чужие — только для чтения."""
-    return has_role(user, program.department, Role.REHAB)
+    """Пациента ставит и убирает тот, кто правит расписание в его отделении: чужие — только
+    для чтения."""
+    return has_right(user, Right.SCHEDULE, program.department)
 
 
 def _require_board(user: User) -> None:
     if not can_edit_board(user):
-        raise BoardError("Расписание правит специалист ФР.")
+        raise BoardError("Нет права править расписание пациентов.")
 
 
 def _require_patient(user: User, program: Program) -> None:
     if not can_edit_patient(user, program):
-        raise BoardError("Пациента другого отделения правит специалист ФР этого отделения.")
+        raise BoardError("Пациента другого отделения правят сотрудники этого отделения.")
 
 
 # --- Просмотр -------------------------------------------------------------------------------
@@ -420,9 +421,9 @@ CANDIDATE_GROUPS = {UNPLACED: "Не распределены", CANCELLED: "От�
 
 def programs_for_cell(user: User, day: date) -> list[Candidate]:
     """Кого можно поставить в ячейку: пациенты на лечении с индивидуальным в эту дату из
-    отделений, где пользователь — специалист ФР. Сначала «Не распределены», затем
+    отделений, где пользователь правит расписание. Сначала «Не распределены», затем
     «Отменены», затем остальные, внутри — по палатам (FR-SCH-10)."""
-    departments = [d for d in departments_for(user) if has_role(user, d, Role.REHAB)]
+    departments = departments_with(user, Right.SCHEDULE)
     programs = (
         Program.objects.filter(department__in=departments, start_date__lt=day, end_date__gt=day)
         .exclude(withdrawn_on(day))

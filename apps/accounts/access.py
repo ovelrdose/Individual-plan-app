@@ -1,4 +1,8 @@
-"""Проверка прав: роль пользователя в отделении (TZ.md §3, FR-ACC-2, FR-ACC-4).
+"""Проверка прав (TZ.md §3, FR-ACC-2, FR-ACC-4, решение 79).
+
+У пользователя — набор прав (`User.rights`) и отделения, в которых он работает. Права общие
+для всех его отделений; программы отделения видит каждый, кто в нём работает. Суперпользователь
+и право «Пользователи и отделения» — сотрудник центра: видит все отделения.
 
 Сервисы вызывают эти функции сами — права не должны зависеть только от шаблонов.
 """
@@ -9,13 +13,34 @@ from django.http import Http404, HttpRequest
 
 from apps.org.models import Department
 
-from .models import Membership, Role, User
+from .models import Right, User
 
 SESSION_DEPARTMENT_KEY = "department_id"
 
 
+def _active(user: User) -> bool:
+    return user.is_authenticated and user.is_active
+
+
 def is_admin(user: User) -> bool:
-    return user.is_authenticated and user.is_active and user.is_superuser
+    """Сотрудник центра: все отделения, пользователи и отделения."""
+    return _active(user) and (user.is_superuser or Right.USERS in user.rights)
+
+
+def has_right(user: User, right: Right, department: Department | None = None) -> bool:
+    """Право есть, и — если указано отделение — пользователь в нём работает."""
+    if not _active(user):
+        return False
+    if not (user.is_superuser or right in user.rights):
+        return False
+    if department is None:
+        return True
+    return department.is_active and departments_for(user).filter(pk=department.pk).exists()
+
+
+def require_right(user: User, right: Right, department: Department | None = None) -> None:
+    if not has_right(user, right, department):
+        raise PermissionDenied("Недостаточно прав для этого действия.")
 
 
 def departments_for(user: User) -> QuerySet[Department]:
@@ -23,37 +48,31 @@ def departments_for(user: User) -> QuerySet[Department]:
     departments = Department.objects.filter(is_active=True)
     if is_admin(user):
         return departments
-    if not user.is_authenticated or not user.is_active:
+    if not _active(user):
         return departments.none()
     return departments.filter(memberships__user=user)
 
 
-def role_in(user: User, department: Department) -> Role | None:
-    membership = Membership.objects.filter(user=user, department=department).first()
-    return Role(membership.role) if membership else None
+def departments_with(user: User, right: Right) -> QuerySet[Department]:
+    """Отделения, где пользователь может сделать то, что даёт право."""
+    departments = departments_for(user)
+    return departments if has_right(user, right) else departments.none()
 
 
-def has_role(user: User, department: Department, *roles: Role) -> bool:
-    """Администратор может всё; остальные — если их роль в отделении среди перечисленных."""
-    if is_admin(user):
-        return True
-    if not user.is_authenticated or not user.is_active or not department.is_active:
-        return False
-    return role_in(user, department) in roles
+def is_attending_doctor(user: User, department: Department) -> bool:
+    """Пользователь — лечащий врач в этом отделении: им он и становится в своих программах."""
+    return (
+        _active(user)
+        and user.is_attending_doctor
+        and user.memberships.filter(department=department).exists()
+    )
 
 
-def has_role_anywhere(user: User, *roles: Role) -> bool:
-    """Для ресурсов центра (расписание групп, тренажёры): роль в любом действующем отделении."""
-    if is_admin(user):
-        return True
-    if not user.is_authenticated or not user.is_active:
-        return False
-    return Membership.objects.filter(user=user, role__in=roles, department__is_active=True).exists()
-
-
-def require_role(user: User, department: Department, *roles: Role) -> None:
-    if not has_role(user, department, *roles):
-        raise PermissionDenied("Недостаточно прав для этого действия в отделении.")
+def doctors_for(department: Department) -> QuerySet[User]:
+    """Кого можно выбрать лечащим врачом программы отделения."""
+    return User.objects.filter(
+        is_active=True, is_attending_doctor=True, memberships__department=department
+    ).order_by("short_name", "last_name", "username")
 
 
 def get_department_or_404(user: User, department_id: int | str) -> Department:

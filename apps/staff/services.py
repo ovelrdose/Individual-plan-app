@@ -1,7 +1,7 @@
 """Инструкторы: пары, смены, распорядок и разовые блоки (TZ.md §4.6).
 
-Смены и распорядок — ресурс центра: правят специалист ФР любого отделения и администратор
-(TZ.md §3), врач — нет. Права проверяются здесь, а не в представлениях.
+Смены и распорядок — ресурс центра: правит тот, у кого есть право «Инструкторы: смены
+и распорядок» (TZ.md §3, решение 79). Права проверяются здесь, а не в представлениях.
 Все изменения сохраняются через save() с ``_history_user`` — так автор попадает в журнал (NFR-5).
 """
 
@@ -15,8 +15,8 @@ from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Q
 
-from apps.accounts.access import has_role_anywhere
-from apps.accounts.models import Role, User
+from apps.accounts.access import has_right
+from apps.accounts.models import Right, User
 from apps.catalog.models import InstructorSlot
 
 from . import domain
@@ -113,13 +113,13 @@ def _link(
 
 
 def can_manage_staff(user: User) -> bool:
-    """Смены и распорядок правят специалист ФР (в любом отделении) и администратор."""
-    return has_role_anywhere(user, Role.REHAB)
+    """Смены и распорядок — право «Инструкторы: смены и распорядок» (решение 79)."""
+    return has_right(user, Right.STAFF)
 
 
 def require_staff_manager(user: User) -> None:
     if not can_manage_staff(user):
-        raise PermissionDenied("Смены и распорядок инструкторов правит специалист ФР.")
+        raise PermissionDenied("Нет права править смены и распорядок инструкторов.")
 
 
 def active_instructors() -> list[Instructor]:

@@ -11,7 +11,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
-from apps.accounts.models import Role
+from apps.accounts.models import Preset
 from apps.catalog.models import Procedure
 from apps.exchange.prescription_sheet import parse_sheet
 from apps.exchange.services import (
@@ -189,7 +189,7 @@ class TestService:
     def test_rights_withdrawn_and_finished(
         self, doctor, make_user, other_department, program, monkeypatch
     ):
-        stranger = make_user("stranger", (other_department, Role.REHAB))
+        stranger = make_user("stranger", (other_department, Preset.REHAB))
         with pytest.raises(PermissionDenied):
             apply_sheet_update(stranger, program, sheet(rows=FIRST))
 

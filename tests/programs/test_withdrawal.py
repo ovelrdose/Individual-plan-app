@@ -10,7 +10,7 @@ import pytest
 from django.core.exceptions import PermissionDenied
 from django.urls import reverse
 
-from apps.accounts.models import Role
+from apps.accounts.models import Preset
 from apps.cards.services import build_card_data
 from apps.programs import services
 from apps.programs.models import Prescription, Withdrawal, WithdrawalReason
@@ -84,7 +84,7 @@ class TestWithdraw:
             services.withdraw(rehab, program, WED, REFUSAL)
 
     def test_rights(self, program, make_user, other_department):
-        stranger = make_user("rehab2", (other_department, Role.REHAB))
+        stranger = make_user("rehab2", (other_department, Preset.REHAB))
         with pytest.raises(PermissionDenied):
             services.withdraw(stranger, program, TUE, REFUSAL)
 

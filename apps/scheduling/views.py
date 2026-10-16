@@ -55,7 +55,7 @@ def _choice[T: Procedure](
     except (ValueError, model.DoesNotExist):
         # Права важнее текста ошибки: врачу — 403, как и при верном значении.
         if not services.can_schedule(request.user, program):
-            raise PermissionDenied("Расписание правит специалист ФР.") from None
+            raise PermissionDenied("Нет права править расписание пациентов.") from None
         raise services.ScheduleError(message) from None
 
 
@@ -186,7 +186,7 @@ def board_view(request: HttpRequest) -> HttpResponse:
 
 def board_cell(request: HttpRequest) -> HttpResponse:
     if not board.can_edit_board(request.user):
-        raise PermissionDenied("Расписание правит специалист ФР.")
+        raise PermissionDenied("Нет права править расписание пациентов.")
     cell = _cell(request, request.GET)
     return _panel(request, cell)
 
@@ -229,7 +229,7 @@ def board_equipment_move(request: HttpRequest, pk: int) -> HttpResponse:
     """Перенести пациента на другое время тренажёра перетаскиванием (FR-SCH-10a). Сверх
     вместимости или вне окна — панель с вопросом о причине, ошибка — панель с текстом."""
     if not board.can_edit_board(request.user):
-        raise PermissionDenied("Расписание правит специалист ФР.")
+        raise PermissionDenied("Нет права править расписание пациентов.")
     booking = get_object_or_404(
         Booking.objects.select_related("program", "equipment"), pk=pk, kind=BookingKind.EQUIPMENT
     )
@@ -285,7 +285,7 @@ def board_note(request: HttpRequest, pk: int) -> HttpResponse:
 def board_patient(request: HttpRequest) -> HttpResponse:
     """Панель пациента из блока «Не распределены» / «Отменены»: выбрать ячейку и поставить."""
     if not board.can_edit_board(request.user):
-        raise PermissionDenied("Расписание правит специалист ФР.")
+        raise PermissionDenied("Нет права править расписание пациентов.")
     day = _board_day(request.GET.get("date"))
     candidate = next(
         (
@@ -492,7 +492,7 @@ def _panel(
     request: HttpRequest, cell: _Cell, *, error: str = "", confirm: list | None = None
 ) -> HttpResponse:
     if not board.can_edit_board(request.user):
-        raise PermissionDenied("Расписание правит специалист ФР.")
+        raise PermissionDenied("Нет права править расписание пациентов.")
     current = board.board(request.user, cell.day)
     seat = next(
         (
@@ -677,7 +677,7 @@ def _booking_panel(
     request: HttpRequest, booking: Booking, *, error: str = "", confirm: list | None = None
 ) -> HttpResponse:
     if not manual.can_edit(request.user, booking.program):
-        raise PermissionDenied("Расписание правит специалист ФР.")
+        raise PermissionDenied("Нет права править расписание пациентов.")
     current = (
         Booking.objects.filter(pk=booking.pk)
         .select_related("procedure", "equipment", "group_session")
@@ -723,7 +723,7 @@ def board_off(request: HttpRequest) -> HttpResponse:
     """«Не работает» из шахматки одним действием: исключение смены, его пациенты — в
     «Не распределены» (FR-STF-6)."""
     if not board.can_edit_board(request.user):
-        raise PermissionDenied("Расписание правит специалист ФР.")
+        raise PermissionDenied("Нет права править расписание пациентов.")
     instructor = get_object_or_404(Instructor, pk=_int(request.POST.get("instructor")))
     day = _board_day(request.POST.get("date"))
     staff_changes.set_not_working(request.user, instructor, day)

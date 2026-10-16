@@ -6,7 +6,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
 from apps.accounts.access import SESSION_DEPARTMENT_KEY
-from apps.accounts.models import Role
+from apps.accounts.models import Preset
 from apps.exchange.prescription_sheet import parse_sheet
 from apps.exchange.services import (
     DuplicateProgramError,
@@ -189,7 +189,7 @@ class TestImportService:
     def test_other_department_is_not_duplicate(
         self, make_user, doctor, department, other_department
     ):
-        other_doctor = make_user("other", (other_department, Role.DOCTOR))
+        other_doctor = make_user("other", (other_department, Preset.DOCTOR))
         do_import(other_doctor, other_department)
 
         do_import(doctor, department)
@@ -201,7 +201,7 @@ class TestImportService:
         assert program.attending_doctor == doctor
 
     def test_stranger_cannot_import(self, make_user, doctor, department, other_department):
-        stranger = make_user("stranger", (other_department, Role.REHAB))
+        stranger = make_user("stranger", (other_department, Preset.REHAB))
         with pytest.raises(PermissionDenied):
             import_prescription_sheet(stranger, department, sheet(), attending_doctor=doctor)
 
@@ -238,7 +238,7 @@ def select(client, department) -> None:
 
 @pytest.fixture
 def two_department_doctor(make_user, department, other_department):
-    return make_user("both", (department, Role.DOCTOR), (other_department, Role.DOCTOR))
+    return make_user("both", (department, Preset.DOCTOR), (other_department, Preset.DOCTOR))
 
 
 class TestImportScreens:
@@ -667,7 +667,7 @@ class TestImportDepartment:
     def test_department_without_role_is_not_offered(
         self, client, make_user, department, other_department
     ):
-        user = make_user("mixed", (department, Role.DOCTOR))
+        user = make_user("mixed", (department, Preset.DOCTOR))
         client.force_login(user)
 
         choices = list(client.get(IMPORT_URL).context["form"].fields["department"].queryset)
@@ -680,7 +680,7 @@ class TestImportDepartment:
     def test_admin_picks_department_and_its_doctor(
         self, client, admin_user, doctor, make_user, department, other_department
     ):
-        stranger = make_user("stranger", (other_department, Role.DOCTOR))
+        stranger = make_user("stranger", (other_department, Preset.DOCTOR))
         client.force_login(admin_user)
 
         wrong = client.post(
@@ -699,7 +699,7 @@ class TestImportDepartment:
         self, client, make_user, department, other_department
     ):
         user = make_user(
-            "both", (department, Role.DOCTOR), (other_department, Role.DOCTOR), short_name="Д."
+            "both", (department, Preset.DOCTOR), (other_department, Preset.DOCTOR), short_name="Д."
         )
         client.force_login(user)
         select(client, other_department)
@@ -712,7 +712,7 @@ class TestImportDepartment:
     def test_admin_without_membership_uses_selected_department(
         self, client, admin_user, make_user, department, other_department
     ):
-        other_doctor = make_user("od", (other_department, Role.DOCTOR))
+        other_doctor = make_user("od", (other_department, Preset.DOCTOR))
         client.force_login(admin_user)
         select(client, other_department)
 
@@ -792,7 +792,7 @@ class TestPendingSheets:
     def test_force_after_switching_department_keeps_original(
         self, client, make_user, department, other_department
     ):
-        user = make_user("both", (department, Role.DOCTOR), (other_department, Role.DOCTOR))
+        user = make_user("both", (department, Preset.DOCTOR), (other_department, Preset.DOCTOR))
         select(client, department)
         token = self._make_pending(client, user)
         select(client, other_department)
@@ -814,7 +814,7 @@ class TestPendingSheets:
     def test_tampered_department_where_user_has_no_role_is_refused(
         self, client, make_user, department, other_department
     ):
-        user = make_user("mixed", (department, Role.DOCTOR))
+        user = make_user("mixed", (department, Preset.DOCTOR))
         select(client, department)
         token = self._make_pending(client, user)
         self._tamper(client, token, department=other_department.pk)
@@ -825,7 +825,7 @@ class TestPendingSheets:
         assert not Program.objects.filter(department=other_department).exists()
 
     def test_tampered_doctor_of_other_department(self, client, doctor, make_user, other_department):
-        stranger = make_user("od", (other_department, Role.DOCTOR))
+        stranger = make_user("od", (other_department, Preset.DOCTOR))
         token = self._make_pending(client, doctor)
         self._tamper(client, token, doctor=stranger.pk)
 

@@ -6,7 +6,7 @@ from django.http import Http404
 from django.test import RequestFactory
 
 from apps.accounts import access
-from apps.accounts.models import Role
+from apps.accounts.models import Preset, Right
 
 
 def request_for(user, session_department=None):
@@ -42,45 +42,72 @@ class TestDepartmentsFor:
         assert not access.departments_for(AnonymousUser()).exists()
 
     def test_several_memberships(self, make_user, department, other_department):
-        user = make_user("both", (department, Role.DOCTOR), (other_department, Role.REHAB))
+        user = make_user("both", (department, Preset.DOCTOR), (other_department, Preset.REHAB))
 
         assert set(access.departments_for(user)) == {department, other_department}
-        assert access.role_in(user, department) == Role.DOCTOR
-        assert access.role_in(user, other_department) == Role.REHAB
+
+    def test_users_right_sees_all(self, make_user, department, other_department):
+        user = make_user("boss", (department, Preset.DOCTOR), rights=[Right.USERS])
+
+        assert set(access.departments_for(user)) == {department, other_department}
+        assert access.is_admin(user)
 
 
-class TestRoles:
+class TestRights:
+    """Права общие для всех отделений пользователя (решение 79)."""
+
     @pytest.mark.parametrize(
-        ("user_fixture", "allowed", "expected"),
+        ("user_fixture", "right", "expected"),
         [
-            ("doctor", (Role.DOCTOR,), True),
-            ("doctor", (Role.REHAB,), False),
-            ("doctor", (Role.DOCTOR, Role.REHAB), True),
-            ("rehab", (Role.REHAB,), True),
-            ("rehab", (Role.DOCTOR,), False),
-            ("admin_user", (Role.DOCTOR,), True),
-            ("admin_user", (), True),
+            ("doctor", Right.PROGRAMS_EDIT, True),
+            ("doctor", Right.PROGRAMS_DELETE, False),
+            ("doctor", Right.SCHEDULE, False),
+            ("rehab", Right.PROGRAMS_DELETE, True),
+            ("rehab", Right.SCHEDULE, True),
+            ("rehab", Right.USERS, False),
+            ("admin_user", Right.USERS, True),
+            ("admin_user", Right.SCHEDULE, True),
         ],
     )
-    def test_has_role(self, request, department, user_fixture, allowed, expected):
+    def test_has_right(self, request, department, user_fixture, right, expected):
         user = request.getfixturevalue(user_fixture)
 
-        assert access.has_role(user, department, *allowed) is expected
+        assert access.has_right(user, right, department) is expected
+        assert access.has_right(user, right) is expected
 
-    def test_no_role_in_foreign_department(self, doctor, other_department):
-        assert access.role_in(doctor, other_department) is None
-        assert not access.has_role(doctor, other_department, Role.DOCTOR, Role.REHAB)
+    def test_only_in_own_departments(self, rehab, other_department):
+        assert access.has_right(rehab, Right.SCHEDULE)
+        assert not access.has_right(rehab, Right.SCHEDULE, other_department)
 
-    def test_inactive_department_denies_members(self, doctor, department):
+    def test_inactive_department_or_user_denies(self, rehab, department):
         department.is_active = False
         department.save()
 
-        assert not access.has_role(doctor, department, Role.DOCTOR)
+        assert not access.has_right(rehab, Right.SCHEDULE, department)
+        rehab.is_active = False
+        assert not access.has_right(rehab, Right.SCHEDULE)
+        assert not access.has_right(AnonymousUser(), Right.SCHEDULE)
 
-    def test_require_role(self, doctor, department):
-        access.require_role(doctor, department, Role.DOCTOR)
+    def test_require_right(self, doctor, department):
+        access.require_right(doctor, Right.PROGRAMS_EDIT, department)
         with pytest.raises(PermissionDenied):
-            access.require_role(doctor, department, Role.REHAB)
+            access.require_right(doctor, Right.SCHEDULE, department)
+
+    def test_departments_with(self, doctor, rehab, department):
+        assert list(access.departments_with(rehab, Right.SCHEDULE)) == [department]
+        assert not access.departments_with(doctor, Right.SCHEDULE).exists()
+
+
+class TestAttendingDoctor:
+    def test_flag_and_department(self, doctor, rehab, department, other_department):
+        assert access.is_attending_doctor(doctor, department)
+        assert not access.is_attending_doctor(doctor, other_department)
+        assert not access.is_attending_doctor(rehab, department)
+
+    def test_doctors_for(self, doctor, rehab, make_user, department):
+        make_user("gone", (department, Preset.DOCTOR), is_active=False)
+
+        assert list(access.doctors_for(department)) == [doctor]
 
 
 class TestCurrentDepartment:
@@ -104,7 +131,7 @@ class TestCurrentDepartment:
         assert access.current_department(request) == department
 
     def test_selected_department_is_kept(self, make_user, department, other_department):
-        user = make_user("both", (department, Role.DOCTOR), (other_department, Role.DOCTOR))
+        user = make_user("both", (department, Preset.DOCTOR), (other_department, Preset.DOCTOR))
         request = request_for(user)
 
         access.select_department(request, other_department.pk)

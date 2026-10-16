@@ -25,7 +25,7 @@
           <p class="mb-2"><strong>{{ patient.label }}</strong>
             {% if patient.program_id %}<a href="{% url 'programs:detail' patient.program_id %}" class="small ms-1">программа</a>{% endif %}</p>
           {% if not editable %}
-            <p class="text-body-secondary small mb-0">Пациент другого отделения — правит специалист ФР этого отделения.</p>
+            <p class="text-body-secondary small mb-0">Пациент другого отделения — правят сотрудники этого отделения.</p>
           {% else %}
             <form class="d-flex gap-1 mb-2" hx-post="{% url 'scheduling:board_move' patient.booking.pk %}"
                   hx-target="#cell-panel" hx-swap="outerHTML">
