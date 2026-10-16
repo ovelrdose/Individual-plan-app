@@ -499,3 +499,60 @@ class TestDoctorVariants:
     @pytest.mark.parametrize(("text", "at"), [("Колено в 9:05", "09:05"), ("Колено 25:00", "")])
     def test_time(self, text, at):
         assert one_row(text).at == at
+
+
+class TestDosageInGroupTitle:
+    """«ЛФК в группе, 30 минут, 3 раза в день» и группы ниже (решение 78)."""
+
+    TEXT = "ЛФК в группе, 30 минут, ежедневно, 3 раза в день\nЭрго общая\nI-can н/к\nЭрго в/к"
+
+    def test_groups_get_title_dosage_once_a_day(self):
+        sheet = parse_sheet(make_sheet(rows=[("07.10.26", self.TEXT, "")]))
+
+        assert [(r.raw_text, r.match_text, r.duration_min, r.per_day) for r in sheet.rows] == [
+            ("ЛФК в группе: Эрго общая", "Эрго общая", 30, 1),
+            ("ЛФК в группе: I-can н/к", "I-can н/к", 30, 1),
+            ("ЛФК в группе: Эрго в/к", "Эрго в/к", 30, 1),
+        ]
+        assert sheet.warnings == []
+
+    def test_frequency_not_matching_groups_is_a_warning(self):
+        text = "ЛФК в группе, 30 минут, 4 раза в день\nЭрго общая\nI can нога"
+
+        sheet = parse_sheet(make_sheet(rows=[("07.10.26", text, "")]))
+
+        assert [r.per_day for r in sheet.rows] == [1, 1]
+        assert any("4 р/д на 2 группы" in w for w in sheet.warnings)
+
+    def test_title_without_groups_stays_a_row(self):
+        """Групп нет — строка остаётся, врач выберет процедуру сам."""
+        text = "ЛФК в группе, 30 минут, 1 раз в день"
+
+        rows = parse_sheet(make_sheet(rows=[("07.10.26", text, "")])).rows
+
+        assert [(r.raw_text, r.duration_min) for r in rows] == [(text, 30)]
+
+    def test_next_title_closes_list(self):
+        text = (
+            "ЛФК в группе, 30 минут, 1 раз в день\nЭрго общая\n"
+            "Бассейн\n- верхняя конечность\n30 мин 1 р/д"
+        )
+
+        rows = parse_sheet(make_sheet(rows=[("07.10.26", text, "")])).rows
+
+        assert [r.raw_text for r in rows] == [
+            "ЛФК в группе: Эрго общая",
+            "Бассейн: верхняя конечность",
+        ]
+
+
+@pytest.mark.parametrize("text", ["Школа пациента", "ФТП", "ФТП.", "Школа пациента 1 раз в день"])
+def test_not_rehab_rows_are_skipped(text):
+    rows = parse_sheet(make_sheet(rows=[("07.10.26", text, ""), ("07.10.26", "Имитрон", "")])).rows
+
+    assert [r.raw_text for r in rows] == ["Имитрон"]
+
+
+def test_physiotherapy_with_details_is_kept():
+    """Пропускается только общая строка «ФТП», уточнённая — назначение."""
+    assert one_row("ФТП: Алмаг 15 мин").raw_text == "ФТП: Алмаг 15 мин"

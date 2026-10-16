@@ -403,6 +403,27 @@ class TestRecognition:
 
         assert labels(program) == ["Эрго общая", "I can нога"]
 
+    def test_dosage_in_title_and_abbreviations(self, doctor, department, full_catalog):
+        """Лист «ЛФК в группе, …, 4 раза в день» с сокращениями н/к, в/к (решение 78)."""
+        text = (
+            "ЛФК в группе, 30 минут, ежедневно, 4 раза в день\n"
+            "Эрго общая\nI-can н/к\nI-can в/к\nЭрго в/к"
+        )
+
+        program = do_import(
+            doctor,
+            department,
+            rows=[
+                ("02.10.26", "Школа пациента", ""),
+                ("02.10.26", text, ""),
+                ("02.10.26", "ФТП", ""),
+            ],
+        )
+
+        assert labels(program) == ["Эрго общая", "I can нога", "I can рука", "Эрго кисть"]
+        assert {p.per_day for p in program.prescriptions.all()} == {1}
+        assert program.import_warnings == []
+
     def test_groups_and_individual_in_one_cell(self, doctor, department, full_catalog):
         text = (
             "Групповые занятия ЛФК\n- Эрго общая\n30 мин 1 р/д\n"

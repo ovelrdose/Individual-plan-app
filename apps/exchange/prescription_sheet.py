@@ -116,7 +116,13 @@ BULLET = re.compile(r"^\s*[-–—]\s*")
 AT_TIME = re.compile(r"(?<![\d:])(\d{1,2}):(\d{2})(?![\d:])")
 NUMBER = re.compile(r"№\s*(\d{1,2})(?!\d)")
 CONSULTATION = re.compile(r"^\s*консультац\w*[\s:]+", re.IGNORECASE)
-GROUP_TITLE = re.compile(r"^\s*групповые\s+занятия", re.IGNORECASE)
+# «Групповые занятия ЛФК» или «ЛФК в группе, 30 минут, 4 раза в день» — заголовок списка групп
+# (во втором случае дозировка — в самом заголовке, решение 78).
+GROUP_TITLE = re.compile(r"^\s*(?:групповые\s+занятия|лфк\s+в\s+групп)", re.IGNORECASE)
+# Не процедуры реабилитации — в программу не попадают (решение 78): «Школа пациента», общая
+# строка «ФТП» (физиотерапию назначает физиотерапевт отдельно). Только вся строка целиком:
+# «ФТП: Алмаг» остаётся назначением.
+NOT_REHAB = re.compile(r"^\s*(?:школа\s+пациент\w*|фтп)\W*$", re.IGNORECASE)
 POOL_TITLE = re.compile(r"бассейн|в\s+воде", re.IGNORECASE)
 # Что остаётся от строки «30 мин 2 р/д е/д, ежедневно» без дозировки — если ничего, это не
 # отдельное назначение, а дозировка для групп над ней.
@@ -293,7 +299,11 @@ def _date(text: str) -> date | None:
 def _physio_rows(
     text: str, prescribed_on: date | None, cancel_date: date | None, warnings: list[str]
 ) -> list[SheetRow]:
-    lines = [_clean(line) for line in text.splitlines() if _clean(line)]
+    lines = [
+        _clean(line)
+        for line in text.splitlines()
+        if _clean(line) and not NOT_REHAB.match(_name_before_dosage(line) or line)
+    ]
     if not lines:
         return []
 
@@ -322,8 +332,17 @@ def _physio_rows(
     # группа идёт один раз (решение владельца 04.10, TZ.md решение 42).
     result: list[SheetRow] = []
     title, groups, in_list, bulleted = "", [], False, False
+    # Дозировка из строки заголовка: «ЛФК в группе, 30 минут, 4 раза в день» — на весь список.
+    title_line = ""
 
     def flush(dosage: str) -> None:
+        nonlocal title_line
+        if title_line and not dosage:
+            dosage = title_line
+            if not groups:
+                # Заголовок с дозировкой, а групп под ним нет — пусть врач выберет процедуру сам.
+                result.append(row(title_line, title_line, title_line))
+            title_line = ""
         total = _int(PER_DAY, dosage)
         if total is not None and groups and total != len(groups):
             names = ", ".join(groups)
@@ -343,6 +362,10 @@ def _physio_rows(
         if BULLET.match(line):
             groups.append(BULLET.sub("", line))
             in_list = bulleted = True
+        elif GROUP_TITLE.match(line) and _has_dosage(line):
+            flush("")
+            title, in_list, bulleted = _name_before_dosage(line), True, False
+            title_line = line
         elif GROUP_TITLE.match(line) or (POOL_TITLE.search(line) and not _has_dosage(line)):
             flush("")
             title, in_list, bulleted = line, True, False

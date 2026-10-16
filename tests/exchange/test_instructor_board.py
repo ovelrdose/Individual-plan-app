@@ -14,6 +14,7 @@ from apps.catalog.models import Procedure
 from apps.exchange.instructor_board import _slot, normalize_group, read_board_staff
 from apps.programs import services as programs
 from apps.programs.models import Prescription
+from apps.scheduling import board_days
 from apps.staff.models import Instructor, InstructorDuty, ShiftPattern
 
 SLOTS = ["9:10-9:40", "9:50-10:20", "10:30-11:00", "13:00-13:30", "15:00-15:30", "18", "18.4"]
@@ -129,8 +130,11 @@ class TestCommand:
         }
 
     def test_replace_removes_others_and_replans(
-        self, board_file, settings, doctor, rehab, admin_user, make_program
+        self, board_file, settings, doctor, rehab, admin_user, make_program, monkeypatch
     ):
+        # Шахматки — на «сегодня» и следующий будний день; курс 05.10–19.10, поэтому «сегодня»
+        # фиксируем внутри курса, иначе тест зависит от даты запуска.
+        monkeypatch.setattr(board_days, "today", lambda: date(2026, 10, 6))
         settings.DEBUG = True
         call_command("seed_dev", stdout=StringIO())
         program = make_program()
