@@ -11,7 +11,6 @@ from openpyxl import load_workbook
 from apps.accounts.models import Role
 from apps.cards.models import CardExport
 from apps.cards.services import build_card_data, card_filename, choose_template, export_card
-from apps.cards.xlsx.formatting import sex_age_text
 from apps.cards.xlsx.writer import CardRenderError
 from apps.programs.models import Prescription, Program
 from apps.programs.services import save_program
@@ -31,7 +30,7 @@ FULL_ROWS = [
 ]
 CONSULTATIONS = "Консультация терапевта, медицинского психолога, эрготерапевта."
 CARD_LABELS = ["Группа Эрго общая", "Группа I can нога", "Инд.занятие", "st-150", "Степпер"]
-CELLS = {  # ФИО, пол/возраст, врач, отделение, строка дат, первая строка процедур
+CELLS = {  # ФИО, палата, врач, отделение, строка дат, первая строка процедур
     3: ("I10", "I11", "J12", "N2", 17, 18),
     4: ("J10", "J11", "K12", "O2", 17, 18),
     5: ("J10", "J11", "K12", "O2", 18, 19),
@@ -44,7 +43,7 @@ def column(index: int) -> str:
 
 @pytest.fixture
 def program(make_program, procedures):
-    program = make_program(shrm=3, sex="Ж", age=17)  # 05.10–15.10, 11 дат
+    program = make_program(shrm=3)  # 05.10–15.10, 11 дат
     Prescription.objects.create(program=program, procedure=procedures["group"], card_order=1)
     Prescription.objects.create(
         program=program,
@@ -62,10 +61,9 @@ def program(make_program, procedures):
 def test_card_data(program):
     data = build_card_data(program)
 
-    assert (data.full_name, data.sex, data.age, data.doctor) == (
+    assert (data.full_name, data.room, data.doctor) == (
         "Тестов Тест Тестович",
-        "Ж",
-        17,
+        "9",
         "Иванова А.А.",
     )
     assert len(data.course_dates) == 11
@@ -89,14 +87,6 @@ def test_unrecognized_row_outside_card_does_not_block(program):
     build_card_data(program)
 
 
-@pytest.mark.parametrize(
-    ("sex", "age", "expected"),
-    [("Ж", 17, "(Ж) 17 лет"), ("М", None, "(М)"), ("", 52, "52 года"), ("", None, "")],
-)
-def test_sex_age_text(sex, age, expected):
-    assert sex_age_text(sex, age) == expected
-
-
 def test_filename(program):
     assert card_filename(program) == "Программа_Тестов_100_05.10.2026.xlsx"
     program.history_number = ""
@@ -112,7 +102,7 @@ def test_download(client, doctor, program):
     assert "filename*=UTF-8''%D0%9F" in response["Content-Disposition"]
     sheet = load_workbook(BytesIO(response.content)).active
     assert sheet["I10"].value == "Тестов Тест Тестович"
-    assert sheet["I11"].value == "(Ж) 17 лет, палата 9"
+    assert sheet["I11"].value == "Палата 9"
     assert isinstance(sheet["C17"].value, datetime)
     assert [sheet["A18"].value, sheet["A19"].value, sheet["A20"].value] == [
         "Группа Эрго общая",
@@ -183,9 +173,9 @@ class TestCardAfterImport:
 
         assert response.status_code == 200
         sheet = load_workbook(BytesIO(response.content)).active
-        name, sex_age, doc, dept, date_row, first_row = CELLS[shrm]
+        name, room, doc, dept, date_row, first_row = CELLS[shrm]
         assert sheet[name].value == "Тестова Анна Сергеевна"
-        assert sheet[sex_age].value == "(Ж), палата 5а"
+        assert sheet[room].value == "Палата 5а"
         assert sheet[doc].value == "Иванова А.А."
         assert sheet[dept].value == "ОМР № 4"
 

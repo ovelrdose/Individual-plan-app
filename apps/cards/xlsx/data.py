@@ -38,8 +38,6 @@ class CardProcedure:
 class CardData:
     department: str
     full_name: str
-    sex: str
-    age: int | None
     doctor: str
     course_dates: tuple[date, ...]
     schedule: tuple[ScheduleItem, ...]
@@ -47,7 +45,7 @@ class CardData:
     # Дни без занятий (поступление и выписка, TZ.md, FR-SCH-1; после выбытия, FR-PRG-9) —
     # заштрихованы во всех строках.
     rest_dates: frozenset[date] = frozenset()
-    # Пациент выбыл — «выбыл ДД.ММ» в строке пола и возраста (FR-PRG-9).
-    withdrawn_on: date | None = None
-    # Палата — в той же строке: «(Ж) 40 лет, палата 5а» (обратная связь по прототипу, 16.10).
+    # Палата — строкой под ФИО вместо пола и возраста (TZ.md, решение 77).
     room: str = ""
+    # Пациент выбыл — «выбыл ДД.ММ» в строке палаты (FR-PRG-9).
+    withdrawn_on: date | None = None

@@ -1,23 +1,28 @@
 """Заполнение шаблона карты (TZ.md, FR-CRD-2).
 
-Оформление шаблона не трогаем: пишем только значения, форматы чисел и серую заливку.
+Оформление шаблона не трогаем: пишем только значения, форматы чисел, серую заливку и шрифт
+палаты.
 """
 
+from copy import copy
 from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .data import CardData, ScheduleItem
-from .formatting import sex_age_text
 from .mapping import CardMapping
 
 TIME_FORMAT = "h:mm"
 DATE_FORMAT = "dd.mm"
 INACTIVE_FILL = PatternFill(fill_type="solid", start_color="FFD9D9D9", end_color="FFD9D9D9")
+# Палату ищут глазами, раскладывая карты по палатам: крупно и жирно, но мельче ФИО (18 пт).
+# В шаблоне у ячейки перенос по словам — он рвал «Палата 14п» на строки, которые обрезала высота
+# строки. Без переноса текст выходит вправо на пустые ячейки и печатается целиком.
+ROOM_FONT = Font(name="Arial", size=16, bold=True)
 
 
 class CardRenderError(ValueError):
@@ -76,12 +81,15 @@ def _check_fits(mapping: CardMapping, data: CardData) -> None:
 def _fill_header(sheet: Worksheet, mapping: CardMapping, data: CardData) -> None:
     sheet[mapping.department] = data.department
     sheet[mapping.full_name] = data.full_name
-    parts = [sex_age_text(data.sex, data.age)]
-    if data.room:
-        parts.append(f"палата {data.room}")
+    parts = [f"Палата {data.room}"] if data.room else []
     if data.withdrawn_on is not None:
         parts.append(f"выбыл {data.withdrawn_on:%d.%m}")
-    sheet[mapping.sex_age] = ", ".join(part for part in parts if part)
+    room = sheet[mapping.room]
+    room.value = ", ".join(parts) or None
+    room.font = ROOM_FONT
+    alignment = copy(room.alignment)
+    alignment.wrap_text = False
+    room.alignment = alignment
     sheet[mapping.doctor] = data.doctor
 
 

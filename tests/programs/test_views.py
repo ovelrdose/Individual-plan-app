@@ -32,6 +32,27 @@ class TestList:
 
         assert client.get("/").url == reverse("programs:list")
 
+    def test_sort_links(self, client, doctor, make_program):
+        make_program(full_name="Альфа А.А.", room="12", start_date=date.today())
+        make_program(full_name="Бета Б.Б.", room="5", start_date=date.today())
+        client.force_login(doctor)
+        url = reverse("programs:list")
+
+        default = client.get(url)
+        by_name = client.get(url, {"sort": "-name", "period": "all", "q": "а"})
+        unknown = client.get(url, {"sort": "-нет"})
+
+        names = [p.full_name for p in default.context["programs"]]
+        assert names == ["Бета Б.Б.", "Альфа А.А."]
+        assert 'href="?sort=-room"' in default.content.decode()  # повторный клик — обратно
+        html = by_name.content.decode()
+        assert [p.full_name for p in by_name.context["programs"]] == ["Бета Б.Б.", "Альфа А.А."]
+        assert 'aria-sort="descending"' in html
+        # Смена столбца и фильтра не сбрасывает остальное.
+        assert "?sort=name&amp;period=all&amp;q=%D0%B0" in html
+        assert "?sort=-name&amp;period=current&amp;q=%D0%B0" in html
+        assert (unknown.context["sort"], unknown.context["descending"]) == ("room", False)
+
     def test_buttons_and_badge(self, client, doctor, make_program):
         program = make_program(start_date=date.today())
         Prescription.objects.create(program=program, raw_text="непонятное")

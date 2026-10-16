@@ -16,11 +16,12 @@
   <form method="get" class="d-flex flex-wrap align-items-center gap-2 mb-3">
     <div class="btn-group" role="group" aria-label="Период">
       {% for value, label in periods %}
-        <a href="?period={{ value }}{% if query %}&q={{ query|urlencode }}{% endif %}"
+        <a href="{% querystring period=value %}"
            class="btn btn-outline-secondary{% if period == value %} active{% endif %}">{{ label }}</a>
       {% endfor %}
     </div>
     <input type="hidden" name="period" value="{{ period }}">
+    <input type="hidden" name="sort" value="{{ order }}">
     <label for="search" class="visually-hidden">Поиск</label>
     <input type="search" id="search" name="q" value="{{ query }}" class="form-control"
            placeholder="ФИО или № ИБ" style="width: 20rem">
@@ -32,12 +33,20 @@
     <table class="table table-hover align-middle">
       <thead class="table-light">
         <tr>
-          <th>Палата</th>
-          <th>ФИО</th>
-          <th>ШРМ</th>
-          <th>Курс</th>
-          <th>Лечащий врач</th>
-          <th>Состояние</th>
+          {# Клик по заголовку — сортировка по столбцу, повторный — в обратную сторону. #}
+          {% for value, label in columns %}
+            <th{% if sort == value %} aria-sort="{% if descending %}descending{% else %}ascending{% endif %}"{% endif %}>
+              <a class="link-body-emphasis text-decoration-none text-nowrap"
+                 href="{% if sort == value and not descending %}{% querystring sort='-'|add:value %}{% else %}{% querystring sort=value %}{% endif %}">
+                {{ label }}
+                {% if sort == value %}
+                  <i class="bi {% if descending %}bi-caret-down-fill{% else %}bi-caret-up-fill{% endif %}"></i>
+                {% else %}
+                  <i class="bi bi-chevron-expand text-body-tertiary"></i>
+                {% endif %}
+              </a>
+            </th>
+          {% endfor %}
         </tr>
       </thead>
       <tbody>

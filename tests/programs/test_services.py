@@ -7,7 +7,7 @@ from django.http import Http404
 from apps.accounts.models import Role
 from apps.programs import services
 from apps.programs.models import Prescription, Program
-from apps.programs.services import Period, ProgramsError
+from apps.programs.services import Period, ProgramsError, Sort
 
 
 def add(doctor, program, procedure, **fields):
@@ -154,6 +154,31 @@ class TestList:
             for p in services.programs_for(doctor, department, today=today)
         }
         assert counts == {"Гамма Г.Г.": 1, "Бета Б.Б.": 0}
+
+    def test_sort_by_columns(self, make_program, make_user, doctor, department):
+        other = make_user("other", (department, Role.DOCTOR), last_name="Яковлева", first_name="Я")
+        make_program(full_name="Яшин Я.Я.", room="12", shrm=3, start_date=date(2026, 10, 3))
+        make_program(
+            full_name="ёлкин Ё.Ё.", room="5а", shrm=5, start_date=date(2026, 10, 1),
+            attending_doctor=other,
+        )  # fmt: skip
+        checked = make_program(full_name="Белов Б.Б.", room="2", shrm=4)
+        Prescription.objects.create(program=checked, raw_text="что-то непонятное")
+        today = date(2026, 10, 6)
+
+        def rooms(sort, descending=False):
+            found = services.programs_for(
+                doctor, department, today=today, sort=sort, descending=descending
+            )
+            return [p.room for p in found]
+
+        assert rooms(Sort.ROOM) == ["2", "5а", "12"]  # по номеру, а не как строки
+        assert rooms(Sort.ROOM, descending=True) == ["12", "5а", "2"]
+        assert rooms(Sort.NAME) == ["2", "5а", "12"]  # «ё» — как «е», без регистра
+        assert rooms(Sort.SHRM) == ["12", "2", "5а"]
+        assert rooms(Sort.COURSE) == ["5а", "12", "2"]
+        assert rooms(Sort.DOCTOR, descending=True) == ["5а", "12", "2"]
+        assert rooms(Sort.STATUS)[0] == "2"  # «требует проверки» — первым
 
     def test_other_department_is_not_listed(
         self, make_program, make_user, other_department, department

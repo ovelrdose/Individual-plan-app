@@ -30,7 +30,9 @@ def test_header(shrm):
 
     assert sheet[mapping.department].value == "ОМР № 4"
     assert sheet[mapping.full_name].value == data.full_name
-    assert sheet[mapping.sex_age].value.startswith(f"({data.sex}) {data.age} ")
+    assert sheet[mapping.room].value == f"Палата {data.room}"
+    assert (sheet[mapping.room].font.b, sheet[mapping.room].font.sz) == (True, 16)
+    assert not sheet[mapping.room].alignment.wrap_text
     assert sheet[mapping.doctor].value == data.doctor
 
 
@@ -201,23 +203,16 @@ def test_rest_dates_are_grey_in_every_row(shrm):
             assert is_grey(sheet[f"{column}{row}"]) == (day in (first, last))
 
 
-def test_withdrawn_note_after_sex_and_age():
-    """Выбывший (FR-PRG-9): «выбыл ДД.ММ» в строке пола и возраста."""
-    data = replace(sample_card(4), withdrawn_on=date(2026, 10, 7))
-    sheet = render(4, data)
-    value = sheet[MAPPINGS[4].sex_age].value
-    assert value.startswith(f"({data.sex}) {data.age} ") and value.endswith(", выбыл 07.10")
-
-
 @pytest.mark.parametrize(
     ("room", "withdrawn_on", "expected"),
     [
-        ("5а", None, "(Ж) 40 лет, палата 5а"),
-        ("5а", date(2026, 10, 7), "(Ж) 40 лет, палата 5а, выбыл 07.10"),
-        ("", None, "(Ж) 40 лет"),
+        ("5а", None, "Палата 5а"),
+        ("5а", date(2026, 10, 7), "Палата 5а, выбыл 07.10"),
+        ("", date(2026, 10, 7), "выбыл 07.10"),
+        ("", None, None),
     ],
 )
-def test_room_in_sex_age_line(room, withdrawn_on, expected):
-    """Палата — в строке пола и возраста, перед отметкой о выбытии."""
-    data = replace(sample_card(4), sex="Ж", age=40, room=room, withdrawn_on=withdrawn_on)
-    assert render(4, data)[MAPPINGS[4].sex_age].value == expected
+def test_room_line(room, withdrawn_on, expected):
+    """Под ФИО — только палата (решение 77) и отметка о выбытии (FR-PRG-9)."""
+    data = replace(sample_card(4), room=room, withdrawn_on=withdrawn_on)
+    assert render(4, data)[MAPPINGS[4].room].value == expected

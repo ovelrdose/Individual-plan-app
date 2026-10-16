@@ -32,6 +32,40 @@ class Period(StrEnum):
     ALL = "all"
 
 
+class Sort(StrEnum):
+    """Столбцы списка программ, по которым он сортируется (решение 77)."""
+
+    ROOM = "room"
+    NAME = "name"
+    SHRM = "shrm"
+    COURSE = "course"
+    DOCTOR = "doctor"
+    STATUS = "status"
+
+
+def _status_rank(program: Program) -> int:
+    """Порядок «Состояния»: сначала то, что требует внимания."""
+    if program.has_schedule_conflicts:
+        return 0
+    if program.import_warnings or program.unrecognized_count:
+        return 1
+    if program.withdrawal is not None:
+        return 4
+    if program.booking_count:
+        return 3
+    return 2
+
+
+_SORT_KEYS = {
+    Sort.ROOM: lambda p: (room_sort_key(p.room), fold(p.full_name)),
+    Sort.NAME: lambda p: fold(p.full_name),
+    Sort.SHRM: lambda p: (p.shrm, room_sort_key(p.room)),
+    Sort.COURSE: lambda p: (p.start_date, p.end_date, room_sort_key(p.room)),
+    Sort.DOCTOR: lambda p: (fold(str(p.attending_doctor or "")), room_sort_key(p.room)),
+    Sort.STATUS: lambda p: (_status_rank(p), room_sort_key(p.room)),
+}
+
+
 # --- Чтение ---------------------------------------------------------------------------
 
 
@@ -42,8 +76,10 @@ def programs_for(
     period: Period = Period.CURRENT,
     query: str = "",
     today: date | None = None,
+    sort: Sort = Sort.ROOM,
+    descending: bool = False,
 ) -> list[Program]:
-    """Список программ отделения (FR-PRG-4) по порядку палат.
+    """Список программ отделения (FR-PRG-4); по умолчанию — по порядку палат.
 
     У каждой программы есть `unrecognized_count` — число нераспознанных назначений.
     Поиск — по ФИО и ИБ без учёта регистра и «ё»: в отделении десятки программ,
@@ -78,7 +114,7 @@ def programs_for(
     found = [
         p for p in programs if not key or key in fold(p.full_name) or key in fold(p.history_number)
     ]
-    return sorted(found, key=lambda p: (room_sort_key(p.room), p.full_name))
+    return sorted(found, key=_SORT_KEYS[sort], reverse=descending)
 
 
 def get_program_or_404(user: User, pk: int) -> Program:

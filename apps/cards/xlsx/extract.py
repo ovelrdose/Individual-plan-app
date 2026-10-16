@@ -53,7 +53,7 @@ def extract_templates(
 
 def data_cells(mapping: CardMapping) -> list[str]:
     """Все ячейки, которые заполняет выгрузка, — в шаблоне они должны быть пустыми."""
-    cells = [mapping.department, mapping.full_name, mapping.sex_age, mapping.doctor]
+    cells = [mapping.department, mapping.full_name, mapping.room, mapping.doctor]
     area = mapping.schedule
     for row in area.rows:
         cells += [f"{col}{row}" for col in _columns_between(area.time_col, area.place_col)]

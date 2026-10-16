@@ -24,8 +24,6 @@ def build_card_data(program: Program) -> CardData:
     return CardData(
         department=program.department.name,
         full_name=program.full_name,
-        sex=program.sex,
-        age=program.age,
         doctor=str(program.attending_doctor),
         course_dates=tuple(program.course_dates()),
         rest_dates=frozenset(

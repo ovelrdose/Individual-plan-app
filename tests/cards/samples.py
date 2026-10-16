@@ -25,8 +25,7 @@ def _shrm3(dates: tuple[date, ...], day: dict[int, date]) -> CardData:
     return CardData(
         department=DEPARTMENT,
         full_name="Тестова Анна Сергеевна",
-        sex="Ж",
-        age=17,
+        room="5а",
         doctor="Иванова А.А.",
         course_dates=dates,
         # Строки — дневная сетка слотов; пустые строки — окна пациента.
@@ -63,8 +62,7 @@ def _shrm4(dates: tuple[date, ...], day: dict[int, date]) -> CardData:
     return CardData(
         department=DEPARTMENT,
         full_name="Примеров Борис Викторович",
-        sex="М",
-        age=52,
+        room="12",
         doctor="Петров Б.Б.",
         course_dates=dates,
         schedule=(
@@ -104,8 +102,7 @@ def _shrm5(dates: tuple[date, ...], day: dict[int, date]) -> CardData:
     return CardData(
         department=DEPARTMENT,
         full_name="Образцова Вера Николаевна",
-        sex="Ж",
-        age=41,
+        room="3",
         doctor="Сидорова В.В.",
         course_dates=dates,
         schedule=(

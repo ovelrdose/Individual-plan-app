@@ -2,7 +2,7 @@
   "3": {
     "department": "N2",
     "full_name": "I10",
-    "sex_age": "I11",
+    "room": "I11",
     "doctor": "J12",
     "schedule": {"first_row": 4, "last_row": 13, "time_col": "B", "label_col": "C", "place_col": "F"},
     "date_blocks": [
@@ -12,7 +12,7 @@
   "4": {
     "department": "O2",
     "full_name": "J10",
-    "sex_age": "J11",
+    "room": "J11",
     "doctor": "K12",
     "schedule": {"first_row": 4, "last_row": 13, "time_col": "B", "label_col": "C", "place_col": "F"},
     "date_blocks": [
@@ -22,7 +22,7 @@
   "5": {
     "department": "O2",
     "full_name": "J10",
-    "sex_age": "J11",
+    "room": "J11",
     "doctor": "K12",
     "schedule": {"first_row": 4, "last_row": 13, "time_col": "B", "label_col": "C", "place_col": "F"},
     "date_blocks": [

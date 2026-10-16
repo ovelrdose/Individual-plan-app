@@ -29,11 +29,32 @@ def program_list(request: HttpRequest) -> HttpResponse:
     except ValueError:
         period = Period.CURRENT
     query = request.GET.get("q", "")
+    # «-room» — по убыванию; неизвестный столбец — порядок по умолчанию, а не ошибка.
+    order = request.GET.get("sort", "")
+    descending = order.startswith("-")
+    try:
+        sort = services.Sort(order.removeprefix("-"))
+    except ValueError:
+        sort, descending = services.Sort.ROOM, False
+    programs = services.programs_for(
+        request.user, department, period=period, query=query, sort=sort, descending=descending
+    )
     return render(
         request,
         "programs/program_list.html",
         {
-            "programs": services.programs_for(request.user, department, period=period, query=query),
+            "programs": programs,
+            "sort": sort,
+            "descending": descending,
+            "order": f"{'-' if descending else ''}{sort}",
+            "columns": [
+                (services.Sort.ROOM, "Палата"),
+                (services.Sort.NAME, "ФИО"),
+                (services.Sort.SHRM, "ШРМ"),
+                (services.Sort.COURSE, "Курс"),
+                (services.Sort.DOCTOR, "Лечащий врач"),
+                (services.Sort.STATUS, "Состояние"),
+            ],
             "period": period,
             "periods": [
                 (Period.CURRENT, "текущие"),

@@ -50,7 +50,7 @@ class DateBlock:
 class CardMapping:
     department: str
     full_name: str
-    sex_age: str
+    room: str
     doctor: str
     schedule: ScheduleArea
     date_blocks: tuple[DateBlock, ...]
@@ -69,7 +69,7 @@ class CardMapping:
         return cls(
             department=data["department"],
             full_name=data["full_name"],
-            sex_age=data["sex_age"],
+            room=data["room"],
             doctor=data["doctor"],
             schedule=ScheduleArea(**data["schedule"]),
             date_blocks=tuple(DateBlock(**block) for block in data["date_blocks"]),
