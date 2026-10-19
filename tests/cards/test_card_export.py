@@ -12,6 +12,7 @@ from apps.accounts.models import Preset
 from apps.cards.models import CardExport
 from apps.cards.services import build_card_data, card_filename, choose_template, export_card
 from apps.cards.xlsx.writer import CardRenderError
+from apps.programs.domain import SHRM_UK
 from apps.programs.models import Prescription, Program
 from apps.programs.services import save_program
 from tests.sheets import make_sheet
@@ -263,7 +264,17 @@ class TestExtendedCourseCard:
 
     @pytest.mark.parametrize(
         ("shrm", "days", "expected"),
-        [(3, 11, 3), (3, 13, 4), (4, 15, 4), (4, 18, 5), (3, 20, 5), (5, 20, 5), (5, 10, 5)],
+        [
+            (3, 11, 3),
+            (3, 13, 4),
+            (4, 15, 4),
+            (4, 18, 5),
+            (3, 20, 5),
+            (5, 20, 5),
+            (5, 10, 5),
+            (SHRM_UK, 15, 4),
+            (SHRM_UK, 18, 5),
+        ],
     )
     def test_choose_template(self, shrm, days, expected):
         assert choose_template(shrm, days) == expected

@@ -5,6 +5,7 @@ import pytest
 from docx import Document
 
 from apps.exchange.prescription_sheet import Sheet, SheetError, parse_sheet
+from apps.programs.domain import SHRM_UK
 from tests.sheets import COLUMNS, HEADER, make_sheet
 
 HEADER_TEXT = HEADER.format(fio="Тестова Анна Сергеевна", ib="1", shrm=4, dx="I69", room="5")
@@ -79,6 +80,28 @@ class TestHeader:
         )
 
         assert (sheet.full_name, sheet.history_number) == ("Тестов Тест Тестович", "")
+
+    @pytest.mark.parametrize(
+        "rest",
+        [
+            "ИБ №5402  ШРМ УК2  Палата № 5а",
+            "ИБ №5402  ШРМ: УК-3  Палата № 5а",
+            "ИБ №5402  ШРМ УК  Палата № 5а",
+            "УК 2  ИБ №5402  Палата № 5а",
+        ],
+    )
+    def test_uk_instead_of_shrm(self, rest):
+        sheet = parse_sheet(make_sheet(header=header(rest=rest)))
+
+        assert (sheet.full_name, sheet.shrm, sheet.room) == (
+            "Тестова Анна Сергеевна",
+            SHRM_UK,
+            "5а",
+        )
+
+    def test_uk_inside_surname_is_not_uk(self):
+        with pytest.raises(SheetError, match="ШРМ"):
+            parse_sheet(make_sheet(header=header(fio="КУКУШКИНА Анна", rest="Палата № 5а")))
 
     def test_missing_required_fields(self):
         with pytest.raises(SheetError, match="ШРМ, палата"):

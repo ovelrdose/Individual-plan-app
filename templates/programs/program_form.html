@@ -44,7 +44,7 @@
           {% for course, copy, link in courses %}
             <div class="mb-2">
               <div><strong>{{ course.start_date|date:"d.m.Y" }} – {{ course.end_date|date:"d.m.Y" }}</strong>,
-                ШРМ {{ course.shrm }}
+                ШРМ {{ course.get_shrm_display }}
                 {% if course.withdrawal %}<span class="badge text-bg-danger">{{ course.withdrawal }}</span>{% endif %}
                 <a href="{% url 'programs:detail' course.pk %}" target="_blank" class="small">открыть</a></div>
               <div class="form-check">

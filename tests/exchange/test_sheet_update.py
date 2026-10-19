@@ -168,6 +168,11 @@ class TestService:
         assert program.end_date == date(2026, 10, 24)
         assert any("Начало идущего курса" in w for w in program.import_warnings)
 
+    def test_shrm_change_to_uk_is_shown_as_label(self, doctor, program):
+        update = preview_sheet_update(doctor, program, sheet(rows=FIRST, shrm="УК1"))
+
+        assert [(c.label, c.old, c.new) for c in update.header] == [("ШРМ", "4", "УК")]
+
     def test_manual_end_date_is_kept(self, doctor, program):
         program.end_date = date(2026, 10, 20)
         programs.save_program(doctor, program, end_date_changed=True)

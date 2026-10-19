@@ -3,6 +3,7 @@
 from datetime import time
 
 from apps.accounts.models import User
+from apps.programs.domain import SHRM_UK
 from apps.programs.models import Program
 from apps.scheduling.services import program_schedule
 
@@ -55,8 +56,11 @@ def card_filename(program: Program) -> str:
 def choose_template(shrm: int, days: int) -> int:
     """Шаблон карты: по ШРМ программы, а если продлённый курс не помещается — самый
     маленький шаблон, где хватает дат (решение владельца 04.10: ШРМ 4 на 18 дней печатается
-    на шаблоне ШРМ 5). Шаблон пока общий для всех отделений."""
+    на шаблоне ШРМ 5). Шаблон пока общий для всех отделений. У УК курс как у ШРМ 4 —
+    и шаблон его же."""
     mappings = bundled_mappings()
+    if shrm == SHRM_UK:
+        shrm = 4
     if mappings[shrm].max_dates >= days:
         return shrm
     fitting = sorted(

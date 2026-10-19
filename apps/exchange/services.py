@@ -14,7 +14,7 @@ from apps.accounts.models import Right, User
 from apps.catalog.models import SESSION_KINDS, Procedure, ProcedureKind
 from apps.catalog.services import visible_procedures
 from apps.org.models import Department
-from apps.programs.domain import course_end, patient_key, sex_from_name
+from apps.programs.domain import SHRM_LABELS, course_end, patient_key, sex_from_name
 from apps.programs.models import Prescription, Program, ProgramSource, Withdrawal
 from apps.programs.services import (
     ProgramsError,
@@ -449,8 +449,9 @@ def _merge(
     header = []
     for field, label in UPDATE_HEADER:
         old, new = getattr(program, field), getattr(sheet, field)
-        if str(old) != str(new):
-            header.append(HeaderChange(label, str(old) or "—", str(new) or "—"))
+        if old != new:
+            shown = (SHRM_LABELS[old], SHRM_LABELS[new]) if field == "shrm" else (old, new)
+            header.append(HeaderChange(label, *(str(value) or "—" for value in shown)))
             setattr(program, field, new)
     program.sex = sex_from_name(program.full_name) or program.sex
     if not program.end_date_manual:

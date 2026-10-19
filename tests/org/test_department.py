@@ -2,13 +2,14 @@ import pytest
 from django.core.exceptions import ValidationError
 
 from apps.org.models import Department
+from apps.programs.domain import SHRM_UK
 
 
 @pytest.mark.django_db
 def test_defaults():
     department = Department.objects.create(name="ОМР № 2", code="omr2")
 
-    assert [department.course_length(shrm) for shrm in (3, 4, 5)] == [11, 15, 20]
+    assert [department.course_length(shrm) for shrm in (3, 4, 5, SHRM_UK)] == [11, 15, 20, 15]
     assert department.max_individual_per_day == 2
     department.full_clean()
 
@@ -17,7 +18,8 @@ def test_defaults():
     "course_days",
     [
         {"3": 11, "4": 15},
-        {"3": 11, "4": 15, "5": 20, "6": 25},
+        {"3": 11, "4": 15, "5": 20},
+        {"3": 11, "4": 15, "5": 20, "УК": 15, "6": 25},
         {"3": 11, "4": 0, "5": 20},
         {"3": 11, "4": "15", "5": 20},
         [11, 15, 20],

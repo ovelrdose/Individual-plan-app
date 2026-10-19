@@ -9,9 +9,10 @@ from django.utils.functional import cached_property
 from simple_history.models import HistoricalRecords
 
 from apps.catalog.models import Procedure, ProcedureKind
-from apps.org.models import SHRM_VALUES, Department
+from apps.org.models import Department
 
 from .domain import (
+    SHRM_LABELS,
     Gap,
     course_dates,
     course_end,
@@ -60,9 +61,7 @@ class Program(models.Model):
     )
     history_number = models.CharField("№ ИБ", max_length=20, blank=True)
     room = models.CharField("палата", max_length=10, help_text="Например «9» или «5а».")
-    shrm = models.PositiveSmallIntegerField(
-        "ШРМ", choices=[(value, str(value)) for value in SHRM_VALUES]
-    )
+    shrm = models.PositiveSmallIntegerField("ШРМ", choices=list(SHRM_LABELS.items()))
     attending_doctor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,

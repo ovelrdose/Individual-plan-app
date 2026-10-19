@@ -16,6 +16,7 @@ from apps.exchange.services import (
     import_prescription_sheet,
 )
 from apps.exchange.views import PENDING_KEY
+from apps.programs.domain import SHRM_UK
 from apps.programs.models import Program, ProgramSource
 from tests.sheets import make_doc_sheet, make_sheet
 
@@ -509,6 +510,12 @@ class TestDatesOnImport:
 
         assert (program.start_date, program.end_date) == (date(2026, 10, 2), end)
         assert len(program.course_dates()) == {3: 11, 4: 15, 5: 20}[shrm]
+
+    def test_uk_course_is_like_shrm4(self, doctor, department):
+        program = do_import(doctor, department, shrm="УК3")
+
+        assert program.shrm == SHRM_UK
+        assert (program.start_date, program.end_date) == (date(2026, 10, 2), date(2026, 10, 16))
 
 
 class TestDuplicateEdges:

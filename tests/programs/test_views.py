@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, time, timedelta
 
 import pytest
 from django.urls import reverse
@@ -7,6 +7,7 @@ from apps.accounts.models import Preset
 from apps.cards.models import CardExport
 from apps.catalog.models import GroupSession
 from apps.programs import services as programs_services
+from apps.programs.domain import SHRM_UK
 from apps.programs.models import Prescription, Program, WithdrawalReason
 from apps.scheduling import board_days
 from apps.scheduling.models import Booking
@@ -52,6 +53,17 @@ class TestList:
         assert "?sort=name&amp;period=all&amp;q=%D0%B0" in html
         assert "?sort=-name&amp;period=current&amp;q=%D0%B0" in html
         assert (unknown.context["sort"], unknown.context["descending"]) == ("room", False)
+
+    def test_uk_in_list_and_detail(self, client, doctor, make_program):
+        program = make_program(shrm=SHRM_UK, start_date=date.today())
+        client.force_login(doctor)
+
+        listing = client.get(reverse("programs:list")).content.decode()
+        detail = client.get(reverse("programs:detail", args=[program.pk])).content.decode()
+
+        assert "<td>УК</td>" in listing
+        assert "ШРМ УК" in detail
+        assert program.end_date == program.start_date + timedelta(days=14)
 
     def test_buttons_and_badge(self, client, doctor, make_program):
         program = make_program(start_date=date.today())

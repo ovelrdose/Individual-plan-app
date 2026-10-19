@@ -27,7 +27,7 @@ def make_sheet(
     *,
     fio: str = "Тестова Анна Сергеевна",
     ib: str = "5402",
-    shrm: int = 4,
+    shrm: int | str = 4,
     dx: str = "Т91.3",
     room: str = "5а",
     rows: list[tuple[str, str, str]] | None = None,

@@ -3,12 +3,12 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from simple_history.models import HistoricalRecords
 
-SHRM_VALUES = (3, 4, 5)
+from apps.programs.domain import SHRM_LABELS
 
 
 def default_course_days() -> dict[str, int]:
     # Календарные дни, включая день поступления (TZ.md, FR-ORG-1).
-    return {"3": 11, "4": 15, "5": 20}
+    return {"3": 11, "4": 15, "5": 20, "УК": 15}
 
 
 class Department(models.Model):
@@ -19,7 +19,7 @@ class Department(models.Model):
     course_days = models.JSONField(
         "длительность курса по ШРМ, дней",
         default=default_course_days,
-        help_text='Например: {"3": 11, "4": 15, "5": 20}',
+        help_text='Например: {"3": 11, "4": 15, "5": 20, "УК": 15}',
     )
     max_individual_per_day = models.PositiveSmallIntegerField(
         "индивидуальных занятий в день, не больше",
@@ -40,13 +40,14 @@ class Department(models.Model):
 
     def clean(self) -> None:
         days = self.course_days
-        expected = {str(shrm) for shrm in SHRM_VALUES}
-        if not isinstance(days, dict) or set(days) != expected:
-            raise ValidationError({"course_days": "Нужны ровно три значения: для ШРМ 3, 4 и 5."})
+        if not isinstance(days, dict) or set(days) != set(SHRM_LABELS.values()):
+            raise ValidationError(
+                {"course_days": "Нужны ровно четыре значения: для ШРМ 3, 4, 5 и УК."}
+            )
         if not all(isinstance(value, int) and value > 0 for value in days.values()):
             raise ValidationError(
                 {"course_days": "Длительность курса — целое положительное число дней."}
             )
 
     def course_length(self, shrm: int) -> int:
-        return self.course_days[str(shrm)]
+        return self.course_days[SHRM_LABELS[shrm]]

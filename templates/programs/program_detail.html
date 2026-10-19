@@ -16,7 +16,7 @@
     <div>
       <h1 class="h3 mb-0">{{ program.full_name }}</h1>
       <div class="text-body-secondary">
-        Индивидуальная программа · {{ program.department.name }} · палата {{ program.room }} · ШРМ {{ program.shrm }} ·
+        Индивидуальная программа · {{ program.department.name }} · палата {{ program.room }} · ШРМ {{ program.get_shrm_display }} ·
         {{ program.start_date|date:"d.m.Y" }} – {{ program.end_date|date:"d.m.Y" }}
         ({{ program.course_dates|length }} дн.)
         {% if withdrawal %}<span class="badge text-bg-danger">{{ withdrawal }}</span>
@@ -134,7 +134,7 @@
             {% for course in courses %}
               {% if course.pk == program.pk %}<strong>{{ course.start_date|date:"d.m.Y" }} – {{ course.end_date|date:"d.m.Y" }}</strong>
               {% else %}<a href="{% url 'programs:detail' course.pk %}">{{ course.start_date|date:"d.m.Y" }} – {{ course.end_date|date:"d.m.Y" }}</a>{% endif %}
-              <span class="text-body-secondary small">ШРМ {{ course.shrm }}</span>{% if not forloop.last %} · {% endif %}
+              <span class="text-body-secondary small">ШРМ {{ course.get_shrm_display }}</span>{% if not forloop.last %} · {% endif %}
             {% endfor %}
           </dd>
         {% endif %}

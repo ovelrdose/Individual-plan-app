@@ -54,7 +54,7 @@
           <tr>
             <td>{{ program.room }}</td>
             <td><a href="{% url 'programs:detail' program.pk %}" class="fw-semibold">{{ program.full_name }}</a></td>
-            <td>{{ program.shrm }}</td>
+            <td>{{ program.get_shrm_display }}</td>
             <td class="text-nowrap">{{ program.start_date|date:"d.m.Y" }} – {{ program.end_date|date:"d.m.Y" }}</td>
             <td>{{ program.attending_doctor }}</td>
             <td>

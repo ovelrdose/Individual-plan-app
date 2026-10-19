@@ -19,6 +19,8 @@ from docx.opc.exceptions import PackageNotFoundError
 from docx.table import Table, _Cell
 from lxml.etree import XMLSyntaxError
 
+from apps.programs.domain import SHRM_LABELS, SHRM_UK
+
 from .word_doc import OLE_SIGNATURE, WordConvertError, doc_to_docx, is_word97
 
 
@@ -83,13 +85,17 @@ class Sheet:
 
 # --- Шапка (FR-IMP-1) -------------------------------------------------------------------
 
+# «УК» отдельным словом, с числом или без: не часть фамилии вроде «КУКУШКИН».
+UK = r"(?<![А-ЯЁа-яё])УК(?:[\s-]*\d+)?(?![А-ЯЁа-яё\d])"
+
 HEADER_FIELDS = {
     # ФИО — до следующего поля шапки, а не до двойного пробела: двойной пробел бывает и
     # внутри ФИО («Тестова  Анна»). «Диагноз» — только граница ФИО: сам диагноз в систему не
     # переносится (решение 70).
-    "full_name": re.compile(r"ФИО:?\s+(?P<v>.+?)\s*(?=ИБ\s*№|ШРМ|Диагноз|Палата|$)"),
+    "full_name": re.compile(rf"ФИО:?\s+(?P<v>.+?)\s*(?=ИБ\s*№|ШРМ|{UK}|Диагноз|Палата|$)"),
     "history_number": re.compile(r"ИБ\s*№\s*(?P<v>[\w-]+)"),
-    "shrm": re.compile(r"ШРМ\s*(?P<v>[345])\b"),
+    # «ШРМ 4»; «ШРМ УК2», «ШРМ: УК-3» или просто «УК 2» — курс УК, число не важно.
+    "shrm": re.compile(rf"ШРМ\s*(?P<v>[345])\b|(?:ШРМ:?\s*)?(?P<uk>{UK})"),
     # «5а», «5 а», «9.» → «5а», «5а», «9». Палаты без номера («ВИП») — как написано.
     "room": re.compile(
         r"Палата\s*(?:№\s*)?(?:(?P<num>\d+)(?:\s?(?P<letter>[а-яёa-z])(?![а-яёa-z]))?|(?P<v>\S+))",
@@ -214,11 +220,13 @@ def _parse_header(paragraphs: list[str]) -> dict:
         if len(values) > 1
     ]
     values = {name: values[0] if values else "" for name, values in found.items()}
-    values["shrm"] = int(values["shrm"])
+    values["shrm"] = SHRM_UK if values["shrm"] == SHRM_LABELS[SHRM_UK] else int(values["shrm"])
     return {"values": values, "warnings": warnings}
 
 
 def _header_value(name: str, match: re.Match) -> str:
+    if name == "shrm" and match.group("uk"):
+        return SHRM_LABELS[SHRM_UK]
     if name == "room" and match.group("num"):
         return match.group("num") + (match.group("letter") or "").lower()
     value = match.group("v").strip().rstrip(".,;")

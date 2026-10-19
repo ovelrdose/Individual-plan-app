@@ -3,6 +3,11 @@
 from collections.abc import Iterable
 from datetime import date, timedelta
 
+SHRM_VALUES = (3, 4, 5)
+# «УК» в листе назначений на месте ШРМ: число после УК не важно, курс — как у ШРМ 4.
+SHRM_UK = 0
+SHRM_LABELS = {3: "3", 4: "4", 5: "5", SHRM_UK: "УК"}
+
 
 def course_end(start_date: date, course_days: int) -> date:
     """Последний день курса: курс считается в календарных днях, включая первый день."""
