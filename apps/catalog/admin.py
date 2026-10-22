@@ -6,7 +6,7 @@ from simple_history.admin import SimpleHistoryAdmin
 
 from apps.accounts.access import departments_for, is_admin
 from apps.accounts.admin_access import RightAdminMixin
-from apps.scheduling.services import replan_for_equipment, replan_for_group
+from apps.scheduling.services import replan_for_equipment, replan_for_group, reset_choices
 
 from .models import SESSION_KINDS, Equipment, GroupSession, InstructorSlot, Procedure
 
@@ -88,12 +88,17 @@ class ProcedureAdmin(RightAdminMixin, SimpleHistoryAdmin):
         # Расписание программ следует за расписанием групп (TZ.md, FR-SCH-18). Программы
         # блокируются раньше, чем меняются занятия группы, — единый порядок блокировок.
         if formset.model is GroupSession and formset.has_changed():
-            replan_for_group(
-                form.instance.pk,
-                save=lambda: super(ProcedureAdmin, self).save_formset(
-                    request, form, formset, change
-                ),
-            )
+
+            def save() -> None:
+                # Выключенное или удалённое занятие больше не выбранное время (решение 81):
+                # сбрасываем с записью в журнал до удаления (иначе SET_NULL — без журнала).
+                deleted = [f.instance.pk for f in formset.deleted_forms if f.instance.pk]
+                reset_choices(deleted, request.user)
+                super(ProcedureAdmin, self).save_formset(request, form, formset, change)
+                inactive = GroupSession.objects.filter(procedure=form.instance, is_active=False)
+                reset_choices(list(inactive.values_list("pk", flat=True)), request.user)
+
+            replan_for_group(form.instance.pk, save=save)
         else:
             super().save_formset(request, form, formset, change)
 
@@ -114,10 +119,33 @@ class GroupSessionAdmin(RightAdminMixin, SimpleHistoryAdmin):
         # Занятие могли перенести в другую группу: пересобираем программы обеих.
         old = GroupSession.objects.filter(pk=obj.pk).values_list("procedure_id", flat=True)
         groups = {obj.procedure_id, *old}
-        replan_for_group(
-            *groups,
-            save=lambda: super(GroupSessionAdmin, self).save_model(request, obj, form, change),
-        )
+
+        def save() -> None:
+            super(GroupSessionAdmin, self).save_model(request, obj, form, change)
+            # Выключили или увели в другую группу — выбор этого времени сбрасывается (решение 81).
+            if not obj.is_active or set(old) - {obj.procedure_id}:
+                reset_choices([obj.pk], request.user)
+
+        replan_for_group(*groups, save=save)
+
+    def delete_model(self, request, obj):
+        self._delete(request, [obj])
+
+    def delete_queryset(self, request, queryset):
+        self._delete(request, list(queryset))
+
+    def _delete(self, request, sessions: list[GroupSession]) -> None:
+        """Удаление занятия пересобирает расписание его группы; выбор этого времени
+        сбрасывается с записью в журнал (решение 81)."""
+        ids = [item.pk for item in sessions]
+
+        def delete() -> None:
+            reset_choices(ids, request.user)
+            for item in sessions:
+                item._history_user = request.user
+                item.delete()
+
+        replan_for_group(*{item.procedure_id for item in sessions}, save=delete)
 
     def get_queryset(self, request):
         queryset = super().get_queryset(request).select_related("procedure")

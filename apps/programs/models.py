@@ -8,7 +8,7 @@ from django.db.models import Exists, F, OuterRef, Q
 from django.utils.functional import cached_property
 from simple_history.models import HistoricalRecords
 
-from apps.catalog.models import Procedure, ProcedureKind
+from apps.catalog.models import SESSION_KINDS, GroupSession, Procedure, ProcedureKind
 from apps.org.models import Department
 
 from .domain import (
@@ -257,12 +257,17 @@ class Prescription(models.Model):
         verbose_name="группа бассейна",
         help_text="Для назначения «Бассейн» без группы; выбирает специалист ФР.",
     )
-    # «Спина в 16:30» в листе: подбор берёт занятие группы в это время (TZ.md, решение 71).
-    preferred_time = models.TimeField(
-        "время группы",
+    # Время группы на весь курс (решение 81): ссылка на занятие, а не время — перенесли занятие
+    # в «Групповых занятиях», и выбор следует за ним. Выключили или удалили — выбор
+    # сбрасывается с записью в журнал (scheduling.services.reset_choices).
+    group_session = models.ForeignKey(
+        GroupSession,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        help_text="Если врач указал время: занятие группы ставится в это время.",
+        related_name="chosen_by",
+        verbose_name="время группы",
+        help_text="Занятие группы на весь курс: из листа или выбрано вручную.",
     )
     card_order = models.PositiveIntegerField("порядок в карте", default=0)
 
@@ -283,6 +288,25 @@ class Prescription(models.Model):
     @property
     def effective_start(self) -> date:
         return self.start_date or self.program.start_date
+
+    @property
+    def choice_group(self) -> Procedure | None:
+        """Группа, из занятий которой выбирают время (решение 81): у «Бассейн» без группы —
+        выбранная группа бассейна, у групп ЛФК, ДС и бассейна — сама процедура."""
+        procedure = self.procedure
+        if procedure is None or procedure.kind not in SESSION_KINDS:
+            return None
+        return self.pool_group if procedure.is_generic_pool else procedure
+
+    def session_fits(self) -> bool:
+        """Выбранное занятие действует и принадлежит группе назначения."""
+        session, group = self.group_session, self.choice_group
+        return (
+            session is not None
+            and group is not None
+            and session.procedure_id == group.pk
+            and session.is_active
+        )
 
     def is_cancelled(self, day: date) -> bool:
         """В этот день процедура уже не проводится."""
@@ -307,9 +331,7 @@ class Prescription(models.Model):
                 "Индивидуальных занятий в день — не больше "
                 f"{program.department.max_individual_per_day}."
             )
-        if self.preferred_time:
-            sessions = self.procedure.sessions.filter(is_active=True) if self.procedure else None
-            if not sessions or not sessions.filter(start_time=self.preferred_time).exists():
-                errors["preferred_time"] = "У этой группы нет занятия в это время."
+        if self.group_session_id and not self.session_fits():
+            errors["group_session"] = "Время группы — действующее занятие этой группы."
         if errors:
             raise ValidationError(errors)

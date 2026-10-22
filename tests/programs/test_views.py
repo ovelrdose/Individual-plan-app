@@ -232,44 +232,46 @@ class TestPrescriptionScreens:
 
         assert "procedure" in response.context["form"].errors
 
-    def test_group_time(self, client, doctor, make_program, procedures):
-        """Время группы из листа правится в назначении; подбор ставит занятие в это время,
-        времени без занятия группы быть не может (TZ.md, решение 71)."""
+    def test_group_time_is_not_in_panel(self, client, doctor, make_program, procedures):
+        """Время группы выбирают только в блоке «Время групп» (решение 81): в панели его нет,
+        строка назначения показывает выбранное время."""
         group = procedures["group"]
-        for start in (time(9, 10), time(13, 40)):
+        sessions = [
             GroupSession.objects.create(procedure=group, start_time=start, duration_min=30)
+            for start in (time(9, 10), time(13, 40))
+        ]
         program = make_program()
-        item = Prescription.objects.create(program=program, procedure=group)
+        item = Prescription.objects.create(
+            program=program, procedure=group, group_session=sessions[1]
+        )
         client.force_login(doctor)
-        url = reverse("programs:prescription_edit", args=[program.pk, item.pk])
-        data = {"edit-procedure": group.pk, "edit-per_day": "1", "edit-in_card": "on"}
 
-        wrong = client.post(url, data | {"edit-preferred_time": "11:00"})
-        client.post(url, data | {"edit-preferred_time": "13:40"})
-
-        assert "нет занятия в это время" in wrong.content.decode()
-        item.refresh_from_db()
-        assert item.preferred_time == time(13, 40)
-        assert set(item.bookings.values_list("start", flat=True)) == {time(13, 40)}
+        panel = client.get(reverse("programs:prescription_edit", args=[program.pk, item.pk]))
         page = client.get(reverse("programs:detail", args=[program.pk])).content.decode()
+
+        assert "preferred_time" not in panel.content.decode()
+        assert "group_session" not in panel.context["form"].fields
         assert "в 13:40" in page
 
-    def test_group_time_choices(self, client, doctor, make_program, procedures):
-        """Время группы выбирается из её занятий, а не вводится вручную."""
+    def test_new_procedure_resets_group_time(self, client, doctor, make_program, procedures):
+        """Сменили процедуру — время прежней группы к новой не подходит и сбрасывается."""
         group = procedures["group"]
-        for start in (time(9, 10), time(13, 40)):
-            GroupSession.objects.create(procedure=group, start_time=start, duration_min=30)
+        session = GroupSession.objects.create(procedure=group, start_time=time(9, 10))
         program = make_program()
-        item = Prescription.objects.create(program=program, procedure=group)
-        card = Prescription.objects.create(program=program, procedure=procedures["card_only"])
+        item = Prescription.objects.create(program=program, procedure=group, group_session=session)
         client.force_login(doctor)
+        url = reverse("programs:prescription_edit", args=[program.pk, item.pk])
+        data = {
+            "edit-procedure": procedures["card_only"].pk,
+            "edit-per_day": "1",
+            "edit-in_card": "on",
+        }
 
-        group_panel = client.get(reverse("programs:prescription_edit", args=[program.pk, item.pk]))
-        card_panel = client.get(reverse("programs:prescription_edit", args=[program.pk, card.pk]))
+        client.post(url, data)
 
-        assert group_panel.context["form"].session_times == [time(9, 10), time(13, 40)]
-        assert '<option value="13:40:00">13:40</option>' in group_panel.content.decode()
-        assert "Время группы" not in card_panel.content.decode()
+        item.refresh_from_db()
+        assert item.procedure == procedures["card_only"] and item.group_session is None
+        assert item.history.first().group_session_id is None
 
     def test_table_and_panel(self, client, doctor, make_program, procedures, monkeypatch):
         """Действующие — в таблице, отменённые — свёрнуты внизу; открытая строка выделена."""

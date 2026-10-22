@@ -265,25 +265,34 @@ def _fill_from_row(
     prescription.cancel_date = row.cancel_date
     prescription.in_card = not (procedure and procedure.evening_individual)
     prescription.card_order = order
-    return _preferred_time(prescription, row) + _fit_into_course(prescription)
+    return _group_time(prescription, row) + _fit_into_course(prescription)
 
 
-def _preferred_time(prescription: Prescription, row: SheetRow) -> list[str]:
-    """«Спина в 16:30»: время из листа важнее подбора, если у группы есть занятие в это время;
-    иначе — предупреждение, время подбирается само (решение 71)."""
-    prescription.preferred_time = None
+def _group_time(prescription: Prescription, row: SheetRow) -> list[str]:
+    """«Спина в 16:30»: время из листа — выбор занятия группы на весь курс (решение 81).
+    Строка без времени выбор не трогает: его могли сделать на странице программы. Выбор,
+    который не подходит к процедуре (врач сменил группу), сбрасывается."""
+    if prescription.group_session_id and not prescription.session_fits():
+        prescription.group_session = None
     procedure = prescription.procedure
     if not row.at or procedure is None or procedure.kind not in SESSION_KINDS:
         return []
+    if procedure.is_generic_pool and prescription.pool_group is None:
+        return [
+            f"«{row.raw_text}»: время из листа ({row.at}) не учтено — сначала выберите группу "
+            "бассейна в блоке «Время групп», затем время."
+        ]
+    group = prescription.choice_group or procedure
     at = time.fromisoformat(row.at)
-    starts = sorted(s.start_time for s in procedure.sessions.filter(is_active=True))
-    if at in starts:
-        prescription.preferred_time = at
+    sessions = sorted(group.sessions.filter(is_active=True), key=lambda s: s.start_time)
+    found = next((s for s in sessions if s.start_time == at), None)
+    if found is not None:
+        prescription.group_session = found
         return []
-    known = ", ".join(f"{t:%H:%M}" for t in starts) or "нет занятий"
+    known = ", ".join(f"{s.start_time:%H:%M}" for s in sessions) or "нет занятий"
     return [
-        f"«{row.raw_text}»: у «{procedure.name}» нет занятия в {row.at} (есть: {known}) — "
-        "время подберётся само. Проверьте назначение."
+        f"«{row.raw_text}»: у «{group.name}» нет занятия в {row.at} (есть: {known}) — "
+        "время из листа не учтено. Проверьте назначение."
     ]
 
 
@@ -465,7 +474,9 @@ def _merge(
             program.end_date = planned
 
     existing = list(
-        program.prescriptions.select_related("procedure", "pool_group").order_by("card_order", "pk")
+        program.prescriptions.select_related("procedure", "pool_group", "group_session").order_by(
+            "card_order", "pk"
+        )
     )
     for item in existing:
         item.program = program  # проверки дат — по новому курсу
@@ -541,8 +552,8 @@ def _describe(item: Prescription) -> str:
         parts.append(f"с {item.start_date:%d.%m}")
     if item.cancel_date:
         parts.append(f"отмена {item.cancel_date:%d.%m}")
-    if item.preferred_time:
-        parts.append(f"в {item.preferred_time:%H:%M}")
+    if item.group_session:
+        parts.append(f"в {item.group_session.start_time:%H:%M}")
     if not item.in_card:
         parts.append("не в карте")
     return ", ".join(parts)

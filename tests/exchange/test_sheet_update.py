@@ -4,7 +4,7 @@
 (вымышленные данные).
 """
 
-from datetime import date
+from datetime import date, time
 
 import pytest
 from django.core.exceptions import PermissionDenied
@@ -152,6 +152,59 @@ class TestService:
 
         assert Booking.objects.filter(pk=pinned.pk, pinned=True).exists()
         assert Booking.objects.filter(prescription=group, date=TUE).exists()
+
+    def test_group_time_from_sheet_and_kept_without_time(self, doctor, rehab, department):
+        """«Колено в 15:00» — выбор занятия; новая версия листа без времени выбор не сбрасывает,
+        с другим временем — меняет и показывает «было → стало» (решение 81)."""
+        knee = "Групповые занятия ЛФК:\nКолено{} – 179 каб.\n30 мин 1 р/д"
+        program = import_prescription_sheet(
+            doctor,
+            department,
+            sheet(rows=[("05.10.26", knee.format(" в 10:30"), "")]),
+            attending_doctor=doctor,
+        )
+        item = program.prescriptions.get()
+        assert item.group_session.start_time == time(10, 30)
+
+        update = apply_sheet_update(
+            doctor, program, sheet(rows=[("05.10.26", knee.format(""), "")])
+        )
+        item.refresh_from_db()
+        assert states(update) == {"ДС: коленный сустав": "same"}
+        assert item.group_session.start_time == time(10, 30)
+
+        preview = preview_sheet_update(
+            doctor, program, sheet(rows=[("05.10.26", knee.format(" в 15:00"), "")])
+        )
+        line = preview.lines[0]
+        assert (line.state, line.old, line.new) == (
+            "changed",
+            "30 мин, 1 р/д, в 10:30",
+            "30 мин, 1 р/д, в 15:00",
+        )
+        item.refresh_from_db()
+        assert item.group_session.start_time == time(10, 30)  # предпросмотр не сохраняет
+
+        apply_sheet_update(doctor, program, sheet(rows=[("05.10.26", knee.format(" в 15:00"), "")]))
+        item.refresh_from_db()
+        assert item.group_session.start_time == time(15, 0)
+        assert set(item.bookings.values_list("start", flat=True)) == {time(15, 0)}
+
+    def test_unknown_time_keeps_choice_with_warning(self, doctor, department):
+        knee = "Групповые занятия ЛФК:\nКолено{} – 179 каб.\n30 мин 1 р/д"
+        program = import_prescription_sheet(
+            doctor,
+            department,
+            sheet(rows=[("05.10.26", knee.format(" в 10:30"), "")]),
+            attending_doctor=doctor,
+        )
+
+        update = apply_sheet_update(
+            doctor, program, sheet(rows=[("05.10.26", knee.format(" в 12:00"), "")])
+        )
+
+        assert program.prescriptions.get().group_session.start_time == time(10, 30)
+        assert any("нет занятия в 12:00" in w and "не учтено" in w for w in update.warnings)
 
     def test_header_and_shrm_change_end_but_not_start(self, doctor, program):
         rows = [("06.10.26", *FIRST[1][1:])]

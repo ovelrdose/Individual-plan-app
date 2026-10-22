@@ -9,6 +9,14 @@
     Строки — слоты сетки инструкторов; пустая строка — окно, в это время пациент свободен.
   </p>
 
+  {% if displaced %}
+    {# Кого переставить: после изменения индивидуальное ушло в «Не распределены» (решение 81). #}
+    <div class="alert alert-warning py-2" id="displaced">
+      <div class="fw-semibold">Переставьте в расписании:</div>
+      {% for item in displaced %}<div>{{ item }}</div>{% endfor %}
+    </div>
+  {% endif %}
+
   {% if schedule.boards %}
     {# Индивидуальные из шахматок (FR-SCH-16): где пациент сегодня и завтра. #}
     <ul class="list-unstyled mb-3">
@@ -21,36 +29,64 @@
     </ul>
   {% endif %}
 
-  {% if schedule.pools %}
-    {# Группа бассейна для назначения «Бассейн» без группы (FR-PRG-3): выбирает специалист ФР. #}
-    <div class="card mb-3" id="pool-groups">
+  {% if schedule.group_times %}
+    {# Время групп (решение 81): одно занятие группы на весь курс. Без выбора подбор ставит сам —
+       жёлтым; «Бассейн» без группы — сначала группа (FR-PRG-3), без неё — красным. #}
+    <div class="card mb-3" id="group-times">
       <div class="card-body py-2">
-        <h3 class="h6 mb-2">Группа бассейна</h3>
+        <h3 class="h6 mb-2">Время групп</h3>
         {% if pool_error %}<div class="alert alert-danger py-2 mb-2">{{ pool_error }}</div>{% endif %}
-        {% for item in schedule.pools %}
-          <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
-            <span class="text-body-secondary small">{{ item.raw_text|default:item.label|truncatechars:60 }}</span>
-            {% if can_schedule %}
-              <form class="d-flex gap-2 align-items-center" method="post"
-                    action="{% url 'scheduling:program_pool_group' program.pk item.pk %}"
-                    hx-post="{% url 'scheduling:program_pool_group' program.pk item.pk %}"
-                    hx-target="#schedule" hx-swap="outerHTML">
-                {% csrf_token %}
-                <select name="group" class="form-select form-select-sm" style="width: auto"
-                        aria-label="Группа бассейна">
-                  <option value="">— не выбрана —</option>
-                  {% for option in schedule.pool_groups %}
-                    <option value="{{ option.procedure.pk }}"{% if option.procedure.pk == item.pool_group_id %} selected{% endif %}>
-                      {{ option.procedure.name }} ({{ option.times }})
-                    </option>
-                  {% endfor %}
-                </select>
-                <button type="submit" class="btn btn-sm btn-outline-primary">Выбрать</button>
-              </form>
-            {% elif item.pool_group %}
-              <span>{{ item.pool_group.name }}</span>
-            {% else %}
-              <span class="text-danger">не выбрана — выбирает специалист ФР</span>
+        {% if group_time_error %}<div class="alert alert-danger py-2 mb-2">{{ group_time_error }}</div>{% endif %}
+        {% for row in schedule.group_times %}
+          <div class="d-flex align-items-center gap-2 mb-1 flex-wrap{% if row.needs_choice %} bg-warning-subtle rounded px-1{% endif %}">
+            <span class="small" title="{{ row.prescription.raw_text }}">{{ row.label|truncatechars:60 }}</span>
+            {% if row.pool %}
+              {% if can_schedule %}
+                <form class="d-flex gap-2 align-items-center" method="post"
+                      action="{% url 'scheduling:program_pool_group' program.pk row.prescription.pk %}"
+                      hx-post="{% url 'scheduling:program_pool_group' program.pk row.prescription.pk %}"
+                      hx-target="#schedule" hx-swap="outerHTML">
+                  {% csrf_token %}
+                  <select name="group" class="form-select form-select-sm" style="width: auto"
+                          aria-label="Группа бассейна">
+                    <option value="">— группа не выбрана —</option>
+                    {% for option in schedule.pool_groups %}
+                      <option value="{{ option.procedure.pk }}"{% if option.procedure.pk == row.prescription.pool_group_id %} selected{% endif %}>
+                        {{ option.procedure.name }} ({{ option.times }})
+                      </option>
+                    {% endfor %}
+                  </select>
+                  <button type="submit" class="btn btn-sm btn-outline-primary">Выбрать</button>
+                </form>
+              {% elif row.group %}
+                <span>{{ row.group.name }}</span>
+              {% endif %}
+            {% endif %}
+            {% if row.group_missing %}
+              <span class="text-danger">группа бассейна не выбрана{% if not can_schedule %} — выбирает специалист ФР{% endif %}</span>
+            {% elif row.group %}
+              {% if can_group_time %}
+                <form class="d-flex gap-2 align-items-center" method="post"
+                      action="{% url 'scheduling:program_group_time' program.pk row.prescription.pk %}"
+                      hx-post="{% url 'scheduling:program_group_time' program.pk row.prescription.pk %}"
+                      hx-target="#schedule" hx-swap="outerHTML">
+                  {% csrf_token %}
+                  <select name="session" class="form-select form-select-sm" style="width: auto"
+                          aria-label="Время группы">
+                    <option value="">— авто{% if row.auto %} ({{ row.auto }}){% endif %} —</option>
+                    {% for option in row.options %}
+                      <option value="{{ option.session.pk }}"{% if option.session.pk == row.chosen_id %} selected{% endif %}>{{ option.text }}</option>
+                    {% endfor %}
+                  </select>
+                  <button type="submit" class="btn btn-sm btn-outline-primary">Выбрать</button>
+                </form>
+              {% elif row.chosen_id %}
+                <span>в {{ row.prescription.group_session.start_time|time:"G:i" }}</span>
+              {% endif %}
+              {% if row.needs_choice %}
+                <span class="text-warning-emphasis small"><i class="bi bi-exclamation-triangle"></i>
+                  время выбрано автоматически{% if row.auto %} ({{ row.auto }}){% endif %} — выберите</span>
+              {% endif %}
             {% endif %}
           </div>
         {% endfor %}

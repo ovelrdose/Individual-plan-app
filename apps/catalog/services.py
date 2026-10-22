@@ -40,10 +40,10 @@ def load_initial_catalog(
     )
     report.count("отделения", created)
 
-    _load_groups(lfk_path, data.LFK_GROUPS, report)
-    _load_groups(pool_path, data.POOL_GROUPS, report)
+    changed = _load_groups(lfk_path, data.LFK_GROUPS, report)
+    changed |= _load_groups(pool_path, data.POOL_GROUPS, report)
     if ds_path is not None:
-        _load_groups(ds_path, data.DS_GROUPS, report)
+        changed |= _load_groups(ds_path, data.DS_GROUPS, report)
     _get_or_create_procedure(data.POOL_UNSPECIFIED, report)
     _get_or_create_procedure(data.INDIVIDUAL, report)
     for spec in data.CARD_ONLY:
@@ -71,10 +71,17 @@ def load_initial_catalog(
         )
         report.count("слоты инструкторов", created)
 
+    if changed:
+        # Новое занятие группы — новое возможное время: текущие программы с этой группой
+        # пересобираются, как после правки в «Групповых занятиях» (решение 81).
+        from apps.scheduling.services import replan_for_group
+
+        replan_for_group(*sorted(changed))
     return report
 
 
-def _load_groups(path: Path, specs: tuple[data.ProcedureSpec, ...], report: LoadReport) -> None:
+def _load_groups(path: Path, specs: tuple[data.ProcedureSpec, ...], report: LoadReport) -> set[int]:
+    """Группы и их занятия из файла; возвращает группы, у которых появились занятия."""
     rows = read_schedule(path)
     unknown = [f"{row.cell} «{row.name}»" for row in rows if not _spec_for(row.name, specs)]
     if unknown:
@@ -83,6 +90,7 @@ def _load_groups(path: Path, specs: tuple[data.ProcedureSpec, ...], report: Load
             "Добавьте их описание в apps/catalog/initial_data.py."
         )
     procedures = {spec.name: _get_or_create_procedure(spec, report) for spec in specs}
+    changed: set[int] = set()
     for row in rows:
         spec = _spec_for(row.name, specs)
         procedure = procedures[spec.name]
@@ -96,6 +104,9 @@ def _load_groups(path: Path, specs: tuple[data.ProcedureSpec, ...], report: Load
             },
         )
         report.count("занятия групп", created)
+        if created:
+            changed.add(procedure.pk)
+    return changed
 
 
 def _spec_for(name: str, specs: tuple[data.ProcedureSpec, ...]) -> data.ProcedureSpec | None:

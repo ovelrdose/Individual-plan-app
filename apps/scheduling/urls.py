@@ -37,4 +37,9 @@ urlpatterns = [
         views.program_pool_group,
         name="program_pool_group",
     ),
+    path(
+        "program/<int:pk>/group-time/<int:prescription_pk>/",
+        views.program_group_time,
+        name="program_group_time",
+    ),
 ]

@@ -1,6 +1,9 @@
 import ipaddress
+from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, time, timedelta
+from typing import Any
 from urllib.parse import quote
 
 from django.conf import settings
@@ -9,15 +12,23 @@ from django.contrib.auth.decorators import login_not_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from apps.cards.views import XLSX
 from apps.cards.xlsx.board import render_board
-from apps.catalog.models import Equipment, GroupSession, InstructorSlot, Procedure
+from apps.catalog.models import (
+    SESSION_KINDS,
+    Equipment,
+    GroupSession,
+    InstructorSlot,
+    Procedure,
+)
 from apps.programs.models import Prescription, Program
 from apps.programs.services import get_program_or_404
+from apps.programs.views import prescriptions_oob
 from apps.staff.models import Instructor
 
 from . import board, board_days, manual, reports, services, staff_changes
@@ -31,16 +42,44 @@ def program_pool_group(request: HttpRequest, pk: int, prescription_pk: int) -> H
     program = get_program_or_404(request.user, pk)
     prescription = get_object_or_404(Prescription, pk=prescription_pk, program=program)
     error = ""
+    with services.watch_displaced(program) as displaced:
+        try:
+            group = _choice(
+                request, program, "group", Procedure, "Выберите группу бассейна из списка."
+            )
+            services.choose_pool_group(request.user, prescription, group)
+        except services.ScheduleError as exc:
+            error = str(exc)
+    return _schedule_response(request, program, error, pool_error=error, displaced=displaced)
+
+
+@require_POST
+def program_group_time(request: HttpRequest, pk: int, prescription_pk: int) -> HttpResponse:
+    """Время группы на весь курс (HTMX, решение 81): возвращает блок расписания целиком —
+    с ошибкой или со списком индивидуальных, ушедших в «Не распределены»."""
+    program = get_program_or_404(request.user, pk)
+    prescription = get_object_or_404(Prescription, pk=prescription_pk, program=program)
+    error, displaced = "", []
     try:
-        group = _choice(request, program, "group", Procedure, "Выберите группу бассейна из списка.")
-        services.choose_pool_group(request.user, prescription, group)
+        session = _choice(
+            request, program, "session", GroupSession, "Выберите время из списка.",
+            allowed=services.can_choose_group_time,
+        )  # fmt: skip
+        result = services.choose_group_time(request.user, prescription, session)
+        displaced = result.displaced
     except services.ScheduleError as exc:
         error = str(exc)
-    return _schedule_response(request, program, error, pool_error=error)
+    return _schedule_response(request, program, error, group_time_error=error, displaced=displaced)
 
 
-def _choice[T: Procedure](
-    request: HttpRequest, program: Program, field: str, model: type[T], message: str
+def _choice[T: Procedure | GroupSession](
+    request: HttpRequest,
+    program: Program,
+    field: str,
+    model: type[T],
+    message: str,
+    *,
+    allowed: Callable[[Any, Program], bool] = services.can_schedule,
 ) -> T | None:
     """Значение из списка выбора: пусто — снять выбор; неверное значение — ошибка, выбор не
     меняется (а не молчаливое снятие или 500 на «²», для которой isdigit() истинно)."""
@@ -54,30 +93,35 @@ def _choice[T: Procedure](
         return model.objects.get(pk=pk)
     except (ValueError, model.DoesNotExist):
         # Права важнее текста ошибки: врачу — 403, как и при верном значении.
-        if not services.can_schedule(request.user, program):
+        if not allowed(request.user, program):
             raise PermissionDenied("Нет права править расписание пациентов.") from None
         raise services.ScheduleError(message) from None
 
 
 def _schedule_response(
-    request: HttpRequest, program: Program, error: str, **extra: str
+    request: HttpRequest, program: Program, error: str, **extra: object
 ) -> HttpResponse:
     if not request.headers.get("HX-Request"):
         # Без JavaScript форма уходит обычным POST — возвращаем на страницу программы.
         if error:
             messages.error(request, error)
+        for item in extra.get("displaced") or []:
+            messages.warning(request, str(item))
         return redirect("programs:detail", pk=program.pk)
     program.refresh_from_db()
-    return render(
-        request,
+    schedule = render_to_string(
         "scheduling/_schedule.html",
         {
             "program": program,
             "schedule": services.program_schedule(program),
             "can_schedule": services.can_schedule(request.user, program),
+            "can_group_time": services.can_choose_group_time(request.user, program),
             **extra,
         },
+        request=request,
     )
+    # Строка назначения тоже меняется («в 11:15», сброс времени при смене группы бассейна).
+    return HttpResponse(schedule + prescriptions_oob(request, program))
 
 
 # --- Экран «Расписание групп» (FR-SCH-18). Действия HTMX возвращают фрагмент целиком. ---------
@@ -85,10 +129,18 @@ def _schedule_response(
 
 def group_schedule(request: HttpRequest) -> HttpResponse:
     services.require_group_schedule(request.user)
+    # Группы и тренажёры — разные вкладки: таблицы длинные и правятся по отдельности.
+    tab = "equipment" if request.GET.get("tab") == "equipment" else "groups"
+    context = _equipment_context() if tab == "equipment" else _sessions_context(request)
     return render(
         request,
         "scheduling/group_schedule.html",
-        {**_sessions_context(request), **_equipment_context()},
+        {
+            **context,
+            "tab": tab,
+            "sessions_count": len(services.group_sessions(request.user)),
+            "equipment_count": Equipment.objects.count(),
+        },
     )
 
 
@@ -147,8 +199,15 @@ def _save(form, action, user):
 def _sessions_context(request, *, add_form=None, edit_form=None, editing=None, result=None):
     if add_form is None:
         add_form = GroupSessionForm(user=request.user, initial={"duration_min": 30})
+    sessions = services.group_sessions(request.user)
+    # Все времена одной группы — рядом: так видно, где у группы несколько занятий в день.
+    order = {kind: index for index, kind in enumerate(SESSION_KINDS)}
+    sessions.sort(key=lambda s: (order.get(s.procedure.kind, 9), s.procedure.name, s.start_time))
+    active = Counter(s.procedure_id for s in sessions if s.is_active)
+    for session in sessions:
+        session.procedure.active_sessions = active[session.procedure_id]
     return {
-        "sessions": services.group_sessions(request.user),
+        "sessions": sessions,
         "add_form": add_form,
         "edit_form": edit_form,
         "editing": editing,
@@ -608,12 +667,15 @@ def booking_restore(request: HttpRequest, pk: int, prescription_pk: int) -> Http
     except ValueError:
         raise Http404("Неверная дата.") from None
     try:
-        manual.restore_date(request.user, prescription, day)
+        with services.watch_displaced(program) as displaced:
+            manual.restore_date(request.user, prescription, day)
     except manual.EditError as error:
         if not manual.can_edit(request.user, program):
             raise PermissionDenied(str(error)) from None
         return _booking_done(request, program, "", error=str(error))
-    return _booking_done(request, program, "Занятие возвращено — подбор поставил его снова.")
+    return _booking_done(
+        request, program, "Занятие возвращено — подбор поставил его снова.", displaced=displaced
+    )
 
 
 def _program_booking(request: HttpRequest, pk: int) -> Booking:
@@ -644,7 +706,8 @@ def _target(booking: Booking, data) -> manual.Target:
 def _booking_act(request: HttpRequest, booking: Booking, action, done: str) -> HttpResponse:
     reason = request.POST.get("reason", "")
     try:
-        result = action(reason)
+        with services.watch_displaced(booking.program) as displaced:
+            result = action(reason)
     except manual.ConfirmationRequired as error:
         return _booking_panel(request, booking, confirm=error.violations)
     except manual.EditError as error:
@@ -652,11 +715,17 @@ def _booking_act(request: HttpRequest, booking: Booking, action, done: str) -> H
             raise PermissionDenied(str(error)) from None
         return _booking_panel(request, booking, error=str(error))
     skipped = getattr(result, "skipped", [])
-    return _booking_done(request, booking.program, done, skipped=skipped)
+    return _booking_done(request, booking.program, done, skipped=skipped, displaced=displaced)
 
 
 def _booking_done(
-    request: HttpRequest, program: Program, done: str, *, error: str = "", skipped=()
+    request: HttpRequest,
+    program: Program,
+    done: str,
+    *,
+    error: str = "",
+    skipped=(),
+    displaced: list[services.Displaced] | None = None,
 ) -> HttpResponse:
     program.refresh_from_db()
     return render(
@@ -666,6 +735,7 @@ def _booking_done(
             "done": done,
             "error": error,
             "skipped": skipped,
+            "displaced": displaced or [],
             "program": program,
             "schedule": services.program_schedule(program),
             "can_schedule": services.can_schedule(request.user, program),

@@ -891,9 +891,9 @@ class TestDoctorVariantsOnImport:
 
         knee = program.prescriptions.get(procedure__name="ДС: коленный сустав")
         back = program.prescriptions.get(procedure__name="ДС: спина")
-        assert knee.preferred_time == time(15, 0)
+        assert knee.group_session.start_time == time(15, 0)
         assert set(knee.bookings.values_list("start", flat=True)) == {time(15, 0)}
-        assert back.preferred_time is None
+        assert back.group_session is None
         assert any("нет занятия в 16:30" in w for w in program.import_warnings)
 
     def test_typo_is_recognized_with_warning(self, doctor, department):

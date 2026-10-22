@@ -11,7 +11,13 @@ from django.views.decorators.http import require_POST
 from apps.accounts.access import current_department, is_attending_doctor
 from apps.exchange.services import can_update_from_sheet
 from apps.scheduling import board_days
-from apps.scheduling.services import can_schedule, program_schedule
+from apps.scheduling.services import (
+    Displaced,
+    can_choose_group_time,
+    can_schedule,
+    program_schedule,
+    watch_displaced,
+)
 
 from . import services
 from .forms import PrescriptionEditForm, PrescriptionForm, ProgramForm, WithdrawalForm
@@ -188,6 +194,7 @@ def program_detail(request: HttpRequest, pk: int) -> HttpResponse:
             "review_items": services.review_items(program),
             "schedule": program_schedule(program),
             "can_schedule": can_schedule(request.user, program),
+            "can_group_time": can_choose_group_time(request.user, program),
             "can_delete": services.can_delete(request.user, program),
             "can_update_from_sheet": can_update_from_sheet(request.user, program),
             "courses": services.patient_courses(program),
@@ -295,11 +302,12 @@ def prescription_add(request: HttpRequest, pk: int) -> HttpResponse:
     form = PrescriptionForm(request.POST or None, instance=Prescription(program=program))
     if request.method == "POST" and form.is_valid():
         try:
-            services.add_prescription(request.user, form.instance)
+            with watch_displaced(program) as displaced:
+                services.add_prescription(request.user, form.instance)
         except ProgramsError as error:
             form.add_error(None, str(error))
         else:
-            return _panel_response(request, program, changed=True)
+            return _panel_response(request, program, changed=True, displaced=displaced)
     return _panel_response(request, program, form=form)
 
 
@@ -311,11 +319,12 @@ def prescription_edit(request: HttpRequest, pk: int, prescription_pk: int) -> Ht
     form = PrescriptionEditForm(request.POST or None, instance=prescription, prefix="edit")
     if request.method == "POST" and form.is_valid():
         try:
-            services.update_prescription(request.user, form.instance)
+            with watch_displaced(program) as displaced:
+                services.update_prescription(request.user, form.instance)
         except ProgramsError as error:
             form.add_error(None, str(error))
         else:
-            return _panel_response(request, program, changed=True)
+            return _panel_response(request, program, changed=True, displaced=displaced)
     return _panel_response(request, program, form=form, editing=prescription)
 
 
@@ -331,15 +340,19 @@ def prescription_cancel(request: HttpRequest, pk: int, prescription_pk: int) -> 
     """«Отменить с завтра» или «Вернуть на весь курс» — самые частые правки одной кнопкой."""
     program, prescription = _get_prescription(request, pk, prescription_pk)
     day = None if request.POST.get("restore") else board_days.today() + timedelta(days=1)
+    displaced: list[Displaced] = []
     try:
-        services.cancel_prescription(request.user, prescription, day)
+        with watch_displaced(program) as displaced:
+            services.cancel_prescription(request.user, prescription, day)
     except ValidationError as error:
         messages.error(request, " ".join(error.messages))
     except ProgramsError as error:
         messages.error(request, str(error))
     prescription.refresh_from_db()
     form = PrescriptionEditForm(instance=prescription, prefix="edit")
-    return _panel_response(request, program, form=form, editing=prescription, changed=True)
+    return _panel_response(
+        request, program, form=form, editing=prescription, changed=True, displaced=displaced
+    )
 
 
 @require_POST
@@ -401,7 +414,7 @@ def _run(request: HttpRequest, action, *args) -> None:
 def _prescriptions_context(request, program, *, selected=None, oob=False) -> dict:
     """Действующие строки — сверху в порядке карты, отменённые (FR-PRG-3) — свёрнуты внизу."""
     today = board_days.today()
-    items = list(program.prescriptions.select_related("procedure"))
+    items = list(program.prescriptions.select_related("procedure", "group_session"))
     return {
         "program": program,
         "active": [item for item in items if not item.is_cancelled(today)],
@@ -410,6 +423,16 @@ def _prescriptions_context(request, program, *, selected=None, oob=False) -> dic
         "selected": selected,
         "oob": oob,
     }
+
+
+def prescriptions_oob(request: HttpRequest, program: Program) -> str:
+    """Таблица назначений вне основной цели HTMX: выбор времени или группы бассейна меняет
+    строку («в 11:15»), а live-событие своей вкладке автор не получает (решение 81)."""
+    return render_to_string(
+        "programs/_prescriptions.html",
+        _prescriptions_context(request, program, oob=True),
+        request=request,
+    )
 
 
 def _prescriptions_response(request, program) -> HttpResponse:
@@ -423,7 +446,13 @@ def _prescriptions_response(request, program) -> HttpResponse:
 
 
 def _panel_response(
-    request, program, *, form=None, editing=None, changed: bool = False
+    request,
+    program,
+    *,
+    form=None,
+    editing=None,
+    changed: bool = False,
+    displaced: list[Displaced] | None = None,
 ) -> HttpResponse:
     """Панель (пустая — закрыта) и таблица с выделенной строкой; после изменения —
     ещё и расписание."""
@@ -446,16 +475,19 @@ def _panel_response(
         ),
         request=request,
     )
-    return HttpResponse(panel + table + (_schedule_oob(request, program) if changed else ""))
+    schedule = _schedule_oob(request, program, displaced) if changed else ""
+    return HttpResponse(panel + table + schedule)
 
 
-def _schedule_oob(request, program) -> str:
+def _schedule_oob(request, program, displaced: list[Displaced] | None = None) -> str:
     return render_to_string(
         "scheduling/_schedule.html",
         {
             "program": program,
             "schedule": program_schedule(program),
             "can_schedule": can_schedule(request.user, program),
+            "can_group_time": can_choose_group_time(request.user, program),
+            "displaced": displaced or [],
             "oob": True,
         },
         request=request,

@@ -233,7 +233,6 @@ EDITABLE_FIELDS = [
     "start_date",
     "cancel_date",
     "in_card",
-    "preferred_time",
 ]
 
 
@@ -262,8 +261,11 @@ def update_prescription(user: User, prescription: Prescription) -> Prescription:
     procedure = prescription.procedure
     if procedure and procedure.evening_individual and before.first() != procedure.pk:
         prescription.in_card = False
+    # Время группы выбиралось из занятий прежней процедуры — у новой оно другое (решение 81).
+    if prescription.group_session_id and not prescription.session_fits():
+        prescription.group_session = None
     prescription.full_clean()
-    _save(prescription, user, update_fields=EDITABLE_FIELDS)
+    _save(prescription, user, update_fields=[*EDITABLE_FIELDS, "group_session"])
     replan(program)
     return prescription
 
@@ -371,9 +373,11 @@ def patient_courses(program: Program) -> list[Program]:
 
 
 def copy_plan(user: User, program: Program, source: Program) -> None:
-    """«Взять прошлый план»: назначения прошлого курса без дат и группа бассейна, выбранная
-    специалистом ФР (решение 63). Расписание пересобирает вызывающий."""
-    for item in source.prescriptions.select_related("procedure").order_by("card_order", "pk"):
+    """«Взять прошлый план»: назначения прошлого курса без дат, группа бассейна, выбранная
+    специалистом ФР (решение 63), и время групп, если занятие ещё действует (решение 81).
+    Расписание пересобирает вызывающий."""
+    items = source.prescriptions.select_related("procedure", "pool_group", "group_session")
+    for item in items.order_by("card_order", "pk"):
         copy = Prescription(
             program=program,
             procedure=item.procedure,
@@ -382,6 +386,7 @@ def copy_plan(user: User, program: Program, source: Program) -> None:
             per_day=item.per_day,
             in_card=item.in_card,
             pool_group=item.pool_group,
+            group_session=item.group_session if item.session_fits() else None,
             card_order=item.card_order,
         )
         _save(copy, user)

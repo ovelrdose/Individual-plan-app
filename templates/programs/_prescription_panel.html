@@ -53,15 +53,6 @@
           </div>
         </div>
 
-        {% if editing and form.session_times %}
-          {# Сменили процедуру — у прежней группы другие занятия: время не отправляется и сбрасывается. #}
-          <div class="mb-3" x-show="id == original">
-            {% include "includes/form_field.html" with field=form.preferred_time wrapper_class="mb-0" %}
-          </div>
-        {% elif editing %}
-          {% for error in form.preferred_time.errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}
-        {% endif %}
-
         <div class="row g-2 mb-3">
           <div class="col-6">{% include "includes/form_field.html" with field=form.start_date wrapper_class="mb-0" %}</div>
           <div class="col-6">{% include "includes/form_field.html" with field=form.cancel_date wrapper_class="mb-0" %}</div>

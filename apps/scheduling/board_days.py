@@ -20,7 +20,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.catalog.domain import add_minutes, minutes_between
-from apps.catalog.models import InstructorSlot, ProcedureKind
+from apps.catalog.models import SESSION_KINDS, InstructorSlot, ProcedureKind
 from apps.programs.domain import room_sort_key
 from apps.programs.models import Prescription, Program, withdrawn_on
 from apps.staff.domain import Pattern
@@ -182,6 +182,7 @@ def _recompute(
         item.program_id: item for item in BoardPatient.objects.filter(date=origin, program__in=ids)
     }
     busy = _busy_on(day, ids)
+    reserved = _reserved_on(day, programs)
     patients = [
         Patient(
             program_id=program.pk,
@@ -191,6 +192,7 @@ def _recompute(
             cancelled=holds[program.pk].cancelled if program.pk in holds else 0,
             busy=tuple(busy[program.pk]),
             evening_note=_evening_note(program, day),
+            reserved=tuple(reserved[program.pk]),
         )
         for program in sorted(programs, key=_patient_order)
     ]
@@ -457,6 +459,27 @@ def _busy_on(day: date, program_ids: list[int]) -> dict[int, list[tuple[int, int
         .values_list("program_id", "start", "end")
     ):
         result[program_id].append((minutes(start), minutes(end)))
+    return result
+
+
+def _reserved_on(day: date, programs: list[Program]) -> dict[int, list[tuple[int, int]]]:
+    """Все занятия групп, у которых время ещё не выбрано, а выбирать есть из чего: новое
+    индивидуальное по возможности их обходит, чтобы выбор не упёрся в него (решение 81)."""
+    by_pk = {program.pk: program for program in programs}
+    result: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    items = Prescription.objects.filter(
+        program__in=programs, procedure__kind__in=SESSION_KINDS
+    ).select_related("procedure", "pool_group", "group_session")
+    for item in items:
+        program = by_pk[item.program_id]
+        group = item.choice_group
+        if group is None or item.session_fits() or not program.is_therapy_day(day):
+            continue
+        if not _active(item, program, day):
+            continue
+        sessions = [s for s in group.sessions.all() if s.is_active]
+        if len(sessions) > item.per_day:
+            result[program.pk] += [(minutes(s.start_time), minutes(s.end_time)) for s in sessions]
     return result
 
 

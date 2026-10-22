@@ -9,7 +9,9 @@
 2. **автоматическая постановка** — недостающие занятия новых пациентов: свободная ячейка
    колонки, где сегодня меньше всего пациентов, затем раннее время, затем порядок колонок.
    Автоматически в ячейку ставится не больше одного пациента. Мото-Л / Артромот — одно
-   занятие в вечернем слоте у инструктора 2/2 (FR-SCH-8).
+   занятие в вечернем слоте у инструктора 2/2 (FR-SCH-8). Если время группы пациенту ещё
+   не выбрано, постановка по возможности обходит все занятия этой группы (``reserved``,
+   решение 81): выбор не должен упираться в индивидуальное.
 
 Два индивидуальных пациента не идут подряд, пациент не бывает в двух местах сразу.
 Время — минуты от полуночи.
@@ -68,6 +70,8 @@ class Patient:
     индивидуальное отменено). ``seats``, ``unplaced``, ``cancelled`` — откуда переносим:
     ячейки и блоки «Не распределены» / «Отменены». ``busy`` — другие занятия пациента в этот
     день (группы, бассейн, тренажёры). ``evening_note`` — назначен Мото-Л / Артромот.
+    ``reserved`` — все возможные времена групп, у которых время ещё не выбрано: автоматическая
+    постановка их обходит, если может; перенос и ручная постановка их не учитывают.
     """
 
     program_id: int
@@ -77,6 +81,7 @@ class Patient:
     cancelled: int = 0
     busy: tuple[tuple[int, int], ...] = ()
     evening_note: str = ""
+    reserved: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -179,18 +184,23 @@ class _Planner:
         note = state.patient.evening_note
         evening = bool(note) and not any(self.slot[s.slot_id].evening for s in state.seats)
         for _ in range(missing):
-            seat = self._best(state, evening, note if evening else "")
+            seat = self._best(state, evening, note if evening else "", reserved=True)
+            if seat is None:
+                # Обойти возможные времена групп нельзя — ставим всё равно (решение 81).
+                seat = self._best(state, evening, note if evening else "", reserved=False)
             if seat is None:
                 state.unplaced += 1
             else:
                 self._place(state, seat)
             evening = False
 
-    def _best(self, state: _State, evening: bool, note: str) -> Seat | None:
+    def _best(self, state: _State, evening: bool, note: str, *, reserved: bool) -> Seat | None:
         best: tuple[tuple[int, int, int], Seat] | None = None
         for order, column in enumerate(self.columns):
             for slot in self.slots:
                 if slot.evening != evening or self.taken[(column.key, slot.id)]:
+                    continue
+                if reserved and _overlaps(slot, state.patient.reserved):
                     continue
                 member = next(
                     (m for m in column.members if m.can_take(slot) and (m.evening or not evening)),
@@ -205,9 +215,8 @@ class _Planner:
 
     def _fits(self, state: _State, slot: GridSlot) -> bool:
         """Пациент свободен в это время, и это не второе индивидуальное подряд."""
-        for start, end in state.patient.busy:
-            if start < slot.end and slot.start < end:
-                return False
+        if _overlaps(slot, state.patient.busy):
+            return False
         for seat in state.seats:
             own = self.slot[seat.slot_id]
             gap = max(own.start - slot.end, slot.start - own.end)
@@ -218,3 +227,7 @@ class _Planner:
     def _place(self, state: _State, seat: Seat) -> None:
         state.seats.append(seat)
         self._occupy(seat)
+
+
+def _overlaps(slot: GridSlot, spans: tuple[tuple[int, int], ...]) -> bool:
+    return any(start < slot.end and slot.start < end for start, end in spans)

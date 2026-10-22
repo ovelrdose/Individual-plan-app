@@ -34,9 +34,15 @@ def propose(snapshot: Snapshot) -> Proposal:
         else:
             # Сначала группы с меньшим выбором времени: у «I can нога» одно занятие в день,
             # у «Нейро-тренинга» два — иначе результат зависел бы от порядка строк в листе.
-            for need in sorted(needs, key=lambda n: (len(n.sessions), n.prescription_id)):
+            # Выбранное время — такой же жёсткий выбор, как единственное занятие.
+            for need in sorted(needs, key=lambda n: (_choices(n), n.prescription_id)):
                 state.place_group(need)
     return state.proposal
+
+
+def _choices(need: Need) -> int:
+    chosen = any(s.id == need.chosen_session_id for s in need.sessions)
+    return 1 if chosen else len(need.sessions)
 
 
 def hhmm(minutes: int) -> str:
@@ -52,6 +58,9 @@ class _State:
         self.load: dict[tuple[int, date], list[tuple[int, int]]] = defaultdict(list)
         for item in snapshot.equipment_load:
             self.load[(item.equipment_id, item.date)].append((item.start, item.end))
+        self.soft: dict[date, list[tuple[int, int]]] = defaultdict(list)
+        for item in snapshot.soft_busy:
+            self.soft[item.date].append((item.start, item.end))
 
     # --- Шаги 1–2: группы ЛФК и ДС, бассейн ---------------------------------------------------
 
@@ -78,15 +87,45 @@ class _State:
                 f"назначено {need.per_day} р/д, а в «Групповых занятиях» {_times(len(options))} "
                 f"в день — поставлено {units}",
             )
+        chosen = next((o for o in options if o.session_id == need.chosen_session_id), None)
+        previous = {pk: rank for rank, pk in enumerate(need.previous_session_ids)}
+        automatic: list[_Option] = []
         for unit in range(units):
             # Закреплённые вручную занятия занимают первые «единицы» дня.
             dates = tuple(day for day in need.dates if need.pinned_on(day) <= unit)
-            # «Первая по времени сессия, которая не пересекается с уже выбранными» (§7.3, шаг 1):
-            # нагрузки у групп нет, поэтому при равном покрытии решает время. Второе занятие
-            # той же группы не совпадёт с первым: пациент в это время уже занят.
-            self._place_course(need, options, dates=dates, fits=self._patient_free,
-                               load=lambda option: 0,
-                               unplaced=IssueCode.GROUP_OVERLAP)  # fmt: skip
+            # Выбранное время — основное для первого занятия дня, без сравнения (решение 81).
+            # Без выбора: больше дней, меньше пересечений с индивидуальными, прежнее время,
+            # затем раннее (§7.3, шаг 1). Второе занятие той же группы не совпадёт с первым:
+            # пациент в это время уже занят.
+            best = self._place_course(
+                need, options, dates=dates, fits=self._patient_free,
+                load=lambda option: 0,
+                avoid=lambda option, dates=dates: (
+                    self._soft_overlaps(option, dates),
+                    previous.get(option.session_id, len(previous)),
+                ),
+                preferred=chosen if unit == 0 else None,
+                unplaced=IssueCode.GROUP_OVERLAP,
+            )  # fmt: skip
+            if best is not None and best is not chosen:
+                automatic.append(best)
+        if need.choice_needed and automatic:
+            starts = ", ".join(hhmm(o.start) for o in options)
+            picked = ", ".join(hhmm(o.start) for o in sorted(automatic, key=lambda o: o.start))
+            self._issue(
+                IssueCode.GROUP_TIME_AUTO,
+                need,
+                f"{_times(len(options))} в день ({starts}) — время выбрано автоматически "
+                f"({picked}), выберите",
+            )
+
+    def _soft_overlaps(self, option: _Option, dates: tuple[date, ...]) -> int:
+        """В скольких днях занятие легло бы на индивидуальное пациента."""
+        return sum(
+            1
+            for day in dates
+            if any(start < option.end and option.start < end for start, end in self.soft[day])
+        )
 
     # --- Шаг 3: тренажёры ------------------------------------------------------------------
 
@@ -131,12 +170,25 @@ class _State:
         fits: Callable[[date, _Option], bool],
         load: Callable[[_Option], int],
         unplaced: IssueCode,
-    ) -> None:
+        avoid: Callable[[_Option], tuple[int, ...]] = lambda option: (),
+        preferred: _Option | None = None,
+    ) -> _Option | None:
+        """Одно время на весь курс и замены по дням; возвращает основное время.
+
+        ``preferred`` — время выбрано человеком: оно основное, даже если подходит не во все дни.
+        ``avoid`` — что учитывать после числа дней: у групп — индивидуальные и прежнее время.
+        """
         dates = need.dates if dates is None else dates
         if not options or not dates:
-            return
-        coverage = {option: sum(fits(day, option) for day in dates) for option in options}
-        best = min(options, key=lambda o: (-coverage[o], load(o), o.start, o.session_id or 0))
+            return None
+        if preferred is not None:
+            best = preferred
+        else:
+            coverage = {option: sum(fits(day, option) for day in dates) for option in options}
+            best = min(
+                options,
+                key=lambda o: (-coverage[o], *avoid(o), load(o), o.start, o.session_id or 0),
+            )
 
         deviations: dict[int, list[date]] = defaultdict(list)
         missing: list[date] = []
@@ -163,6 +215,7 @@ class _State:
             )
         if missing:
             self._issue(unplaced, need, f"{_days(missing)} — нет свободного времени, не поставлено")
+        return best
 
     def _patient_free(self, day: date, option: _Option) -> bool:
         return all(end <= option.start or option.end <= start for start, end in self.busy[day])

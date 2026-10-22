@@ -1,4 +1,4 @@
-{# Итог правки расписания групп: у кого пересобрано расписание, что осталось поправить вручную. #}
+{# Итог правки расписания групп: у кого пересобрано расписание и что изменилось (решение 81). #}
 {% if result %}
   <div class="alert alert-success py-2">
     Сохранено.
@@ -8,10 +8,22 @@
       Текущих программ с этим занятием нет.
     {% endif %}
   </div>
-  {% if result.pinned %}
+  {% if result.reset %}
     <div class="alert alert-warning py-2">
-      Закреплены вручную в старое время — поправьте в расписании программы:
-      {% for booking in result.pinned %}{{ booking.date|date:"d.m" }} {{ booking.program.room_label }} {{ booking.program.surname }}{% if booking.program.department_id != current_department.pk %} ({{ booking.program.department.name }}){% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}.
+      Выбор времени сброшен — группа поставлена автоматически, выберите время заново:
+      {% for item in result.reset %}{{ item.program.room_label }} {{ item.program.surname }}{% if item.program.department_id != current_department.pk %} ({{ item.program.department.name }}){% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}.
+    </div>
+  {% endif %}
+  {% if result.unpinned %}
+    <div class="alert alert-warning py-2">
+      Сняты закреплённые в старое время — группа поставлена по новому расписанию:
+      {% for booking in result.unpinned %}{{ booking.date|date:"d.m" }} {{ booking.program.room_label }} {{ booking.program.surname }}{% if booking.program.department_id != current_department.pk %} ({{ booking.program.department.name }}){% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}.
+    </div>
+  {% endif %}
+  {% if result.displaced %}
+    <div class="alert alert-warning py-2">
+      Индивидуальные в «Не распределены» — пересеклись с группой:
+      {% for item in result.displaced %}{{ item.date|date:"d.m" }} {{ item.program.room_label }} {{ item.program.surname }} ({{ item.start|time:"G:i" }} {{ item.instructor }}){% if not forloop.last %}, {% endif %}{% endfor %}.
     </div>
   {% endif %}
 {% endif %}

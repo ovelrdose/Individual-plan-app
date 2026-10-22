@@ -87,7 +87,8 @@ class PrescriptionForm(_ProcedurePicker, BootstrapFormMixin, forms.ModelForm):
 
 
 class PrescriptionEditForm(_ProcedurePicker, BootstrapFormMixin, forms.ModelForm):
-    """Правка строки, в том числе выбор процедуры для нераспознанной строки из листа."""
+    """Правка строки, в том числе выбор процедуры для нераспознанной строки из листа. Время
+    группы здесь не выбирается — только в блоке «Время групп» расписания (решение 81)."""
 
     class Meta:
         model = Prescription
@@ -98,7 +99,6 @@ class PrescriptionEditForm(_ProcedurePicker, BootstrapFormMixin, forms.ModelForm
             "start_date",
             "cancel_date",
             "in_card",
-            "preferred_time",
         ]
         widgets = {"start_date": DateInput(), "cancel_date": DateInput()}
         labels = {"duration_min": "Мин", "per_day": "Раз в день", "cancel_date": "Отменено с"}
@@ -106,22 +106,15 @@ class PrescriptionEditForm(_ProcedurePicker, BootstrapFormMixin, forms.ModelForm
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._setup_procedure()
-        # Время группы — из её занятий (решение 71); другое время модель всё равно отклонит.
-        procedure = self.instance.procedure
-        times = (
-            sorted(procedure.sessions.filter(is_active=True).values_list("start_time", flat=True))
-            if procedure
-            else []
-        )
-        current = self.instance.preferred_time
-        if current and current not in times:
-            times = sorted([*times, current])
-        self.session_times = times
-        self.fields["preferred_time"].help_text = "«Любое» — подбор выберет сам."
-        self.fields["preferred_time"].widget = forms.Select(
-            choices=[("", "любое"), *((t.isoformat(), f"{t:%H:%M}") for t in times)],
-            attrs={"class": "form-select", ":disabled": "id != original"},
-        )
+
+    def clean(self) -> dict:
+        cleaned = super().clean()
+        # Другая процедура — время прежней группы к ней не относится: сбрасываем до проверки
+        # модели, иначе она отклонила бы правку из-за поля, которого в форме нет.
+        procedure = cleaned.get("procedure")
+        if procedure is not None and procedure.pk != self.instance.procedure_id:
+            self.instance.group_session = None
+        return cleaned
 
 
 class WithdrawalForm(BootstrapFormMixin, forms.Form):

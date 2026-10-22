@@ -203,3 +203,20 @@ class TestReadSchedule:
 
         with pytest.raises(ScheduleFileError, match="A1"):
             read_schedule(path)
+
+
+def test_new_sessions_replan_programs(loaded, monkeypatch):
+    """Новое занятие группы — новое возможное время: программы с группой пересобираются
+    (решение 81). Повторная загрузка без новых занятий ничего не пересобирает."""
+    from apps.scheduling import services as scheduling
+
+    calls: list[tuple[int, ...]] = []
+    monkeypatch.setattr(scheduling, "replan_for_group", lambda *ids, **kw: calls.append(ids))
+    neuro = Procedure.objects.get(name="Нейро-тренинг")
+    GroupSession.objects.filter(procedure=neuro, start_time=time(14, 20)).delete()
+
+    load_initial_catalog(LFK, POOL)
+    load_initial_catalog(LFK, POOL)
+
+    assert calls == [(neuro.pk,)]
+    assert starts("Нейро-тренинг") == [time(10, 30), time(14, 20)]

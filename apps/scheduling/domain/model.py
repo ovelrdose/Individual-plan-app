@@ -57,6 +57,15 @@ class Need:
     unavailable: str = ""
     # Сколько занятий в день уже закреплено вручную — подбор добирает только остальное.
     pinned_units: tuple[tuple[date, int], ...] = ()
+    # Время группы, выбранное на странице программы или взятое из листа (решение 81): основное
+    # время первого занятия дня, без сравнения с другими.
+    chosen_session_id: int | None = None
+    # Занятий у группы в день больше, чем назначено, а время не выбрано: подбор ставит сам
+    # и предупреждает (GROUP_TIME_AUTO).
+    choice_needed: bool = False
+    # На каких занятиях стояли автоматические до пересборки, частые — первыми: при равном
+    # выборе время не прыгает (например, когда у группы добавили более раннее занятие).
+    previous_session_ids: tuple[int, ...] = ()
 
     def pinned_on(self, day: date) -> int:
         return dict(self.pinned_units).get(day, 0)
@@ -86,6 +95,9 @@ class Snapshot:
     needs: tuple[Need, ...]
     patient_busy: tuple[Busy, ...] = ()
     equipment_load: tuple[EquipmentLoad, ...] = ()
+    # Индивидуальные пациента в составленных шахматках: группа без выбранного времени по
+    # возможности их обходит, но не обязана (выбранное время важнее индивидуального).
+    soft_busy: tuple[Busy, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -109,6 +121,8 @@ class IssueCode(StrEnum):
     EQUIPMENT_UNPLACED = "EQUIPMENT_UNPLACED"
     # Предупреждения — поставлено, но не так, как хотелось бы.
     DAY_DEVIATION = "DAY_DEVIATION"
+    # Время группы не выбрано, а занятий в день больше назначенного (решение 81).
+    GROUP_TIME_AUTO = "GROUP_TIME_AUTO"
 
 
 CONFLICTS = {

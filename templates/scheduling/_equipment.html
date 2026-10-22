@@ -1,6 +1,7 @@
 <div id="equipment-table">
   {% include "scheduling/_rescheduled.html" with result=equipment_result %}
 
+  <div class="table-responsive">
   <table class="table table-sm align-middle">
     <thead class="table-light">
       <tr>
@@ -34,7 +35,7 @@
                       hx-post="{% url 'scheduling:equipment_edit' equipment.pk %}"
                       hx-include="closest tr" hx-target="#equipment-table" hx-swap="outerHTML">Сохранить</button>
               <button class="btn btn-sm btn-link"
-                      hx-get="{% url 'scheduling:group_schedule' %}" hx-select="#equipment-table"
+                      hx-get="{% url 'scheduling:group_schedule' %}?tab=equipment" hx-select="#equipment-table"
                       hx-target="#equipment-table" hx-swap="outerHTML">Отмена</button>
             </td>
           </tr>
@@ -58,4 +59,5 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>

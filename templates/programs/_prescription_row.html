@@ -13,7 +13,7 @@
       <span class="{% if not number %}text-decoration-line-through{% endif %}">{{ prescription.label }}</span>
       <div class="small text-body-secondary">
         {{ prescription.procedure.get_kind_display }}
-        {% if prescription.preferred_time %}· <span class="text-info-emphasis" title="Занятие группы — в это время">в {{ prescription.preferred_time|time:"H:i" }}</span>{% endif %}
+        {% if prescription.group_session %}· <span class="text-info-emphasis" title="Время группы выбрано — правится в блоке «Время групп»">в {{ prescription.group_session.start_time|time:"H:i" }}</span>{% endif %}
         {% if not prescription.in_card %}· <span class="text-warning-emphasis">не в карте</span>{% endif %}
         {% if prescription.raw_text %}· <span title="Из листа: {{ prescription.raw_text }}">{{ prescription.raw_text|truncatechars:60 }}</span>{% endif %}
       </div>
