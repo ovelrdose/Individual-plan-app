@@ -1,0 +1,127 @@
+{# Окно правки группы (решение 82): поля группы, её времена, удаление и архив. Без группы и #}
+{# формы — закрыто. Таблица раздела приходит рядом через hx-swap-oob. #}
+{% if group or group_form or message %}
+<div id="group-panel" class="side-panel">
+  <div class="card border-0">
+    <div class="card-header d-flex align-items-center gap-2">
+      <strong class="text-truncate">{% if group %}{{ group.name }}{% elif group_form %}Новая группа{% else %}Раздел «{{ section.name }}»{% endif %}</strong>
+      {% if group and not group.is_active %}<span class="badge text-bg-secondary">в архиве</span>{% endif %}
+      <button type="button" class="btn-close ms-auto" data-panel-close aria-label="Закрыть"></button>
+    </div>
+    <div class="card-body">
+      {% if message %}<div class="alert alert-success py-2">{{ message }}</div>{% endif %}
+      {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
+      {% include "scheduling/_rescheduled.html" with result=result %}
+
+      {% if confirm %}
+        <div class="alert alert-warning">
+          {% if confirm.used %}
+            {% if confirm.kind == "group" %}
+              Группа «{{ group.name }}» уже использовалась — она уйдёт в архив вместе со всеми временами:
+              её не будет в поиске, в листе назначений и в выборе групп, «Ведение группы» у инструкторов закончится сегодня.
+            {% else %}
+              Время {{ confirm.item.start_time|time:"G:i" }} уже использовалось — оно уйдёт в архив, «Ведение группы» на него закончится сегодня.
+            {% endif %}
+            <div class="fw-semibold mt-1">Будет затронуто текущих программ: {{ confirm.programs }} — их расписание пересоберётся.</div>
+          {% elif confirm.kind == "group" %}
+            Группа «{{ group.name }}» ни разу не использовалась — она удалится совсем вместе со своими временами.
+          {% else %}
+            Время {{ confirm.item.start_time|time:"G:i" }} ни разу не использовалось — оно удалится совсем.
+            {% if confirm.programs %}<div class="mt-1">Будет затронуто текущих программ: {{ confirm.programs }} — их расписание пересоберётся.</div>{% endif %}
+          {% endif %}
+          <div class="d-flex gap-2 mt-2">
+            <button type="button" class="btn btn-sm btn-danger"
+                    hx-post="{{ confirm.url }}" hx-vals='{"confirm": "1"}' hx-target="#group-panel" hx-swap="outerHTML">
+              <i class="bi bi-trash"></i> Удалить
+            </button>
+            <button type="button" class="btn btn-sm btn-link"
+                    hx-get="{% url 'scheduling:group_edit' group.pk %}" hx-target="#group-panel" hx-swap="outerHTML">Отмена</button>
+          </div>
+        </div>
+      {% endif %}
+
+      {# Правка группы — две колонки: слева поля группы, справа её времена (окно без прокрутки). #}
+      <div class="row g-4">
+      {% if group_form %}<div class="{% if group %}col-lg-7{% else %}col-12{% endif %}">{% include "scheduling/_group_form.html" with form=group_form editing=group %}</div>{% endif %}
+
+      {% if group %}
+        <div class="{% if group_form %}col-lg-5 border-start-lg{% else %}col-12{% endif %}">
+        <h3 class="h6">Время занятий</h3>
+        {% for session, form in session_rows %}
+          <form class="mb-2" hx-post="{% url 'scheduling:session_edit' session.pk %}" hx-target="#group-panel" hx-swap="outerHTML">
+            {% for e in form.non_field_errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            <div class="d-flex gap-1 align-items-start">
+              <div style="width: 7rem">{{ form.start_time }}</div>
+              <div style="width: 4.5rem" title="Длительность, мин">{{ form.duration_min }}</div>
+              <div class="flex-grow-1">{{ form.place }}</div>
+              <button type="submit" class="btn btn-sm btn-outline-success" title="Сохранить время"><i class="bi bi-check-lg"></i></button>
+              <button type="button" class="btn btn-sm btn-outline-danger" title="Удалить время"
+                      hx-post="{% url 'scheduling:session_delete' session.pk %}" hx-target="#group-panel" hx-swap="outerHTML"><i class="bi bi-trash"></i></button>
+            </div>
+            {% for field in form %}{% for e in field.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}{% endfor %}
+          </form>
+        {% empty %}
+          <p class="small text-body-secondary">Действующих времён нет.</p>
+        {% endfor %}
+
+        {% if group.is_active %}
+          {% with form=new_session_form %}
+            <form class="mt-2" hx-post="{% url 'scheduling:session_add' %}" hx-target="#group-panel" hx-swap="outerHTML"
+                  x-data="{ open: {% if form.is_bound %}true{% else %}false{% endif %} }">
+              <input type="hidden" name="{{ form.procedure.html_name }}" value="{{ group.pk }}">
+              <button type="button" class="btn btn-sm btn-link px-0" x-show="!open" @click="open = true"><i class="bi bi-plus-lg"></i> время</button>
+              <div x-show="open" x-cloak>
+                {% for e in form.non_field_errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+                <div class="d-flex gap-1 align-items-start">
+                  <div style="width: 7rem">{{ form.start_time }}</div>
+                  <div style="width: 4.5rem" title="Длительность, мин">{{ form.duration_min }}</div>
+                  <div class="flex-grow-1">{{ form.place }}</div>
+                  <button type="submit" class="btn btn-sm btn-success">Добавить</button>
+                </div>
+                {% for field in form %}{% for e in field.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}{% endfor %}
+                <div class="form-text">Новое время не сдвигает пациентов: если у группы теперь несколько занятий в день, в их программах появится «выберите время».</div>
+              </div>
+            </form>
+          {% endwith %}
+        {% endif %}
+
+        {% if archived_sessions %}
+          <h4 class="h6 mt-3 text-body-secondary">В архиве</h4>
+          <ul class="list-unstyled small mb-0">
+            {% for session in archived_sessions %}
+              <li class="d-flex align-items-center gap-2 mb-1 text-body-secondary">
+                {{ session.start_time|time:"G:i" }}–{{ session.end_time|time:"G:i" }}, {{ session.duration_min }} мин
+                {% if group.is_active %}
+                  <button type="button" class="btn btn-sm btn-outline-primary ms-auto"
+                          hx-post="{% url 'scheduling:session_restore' session.pk %}" hx-target="#group-panel" hx-swap="outerHTML">
+                    <i class="bi bi-arrow-counterclockwise"></i> Вернуть из архива
+                  </button>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+
+        <hr>
+        <div class="d-flex">
+          {% if group.is_active %}
+            <button type="button" class="btn btn-sm btn-outline-danger ms-auto"
+                    hx-post="{% url 'scheduling:group_delete' group.pk %}" hx-target="#group-panel" hx-swap="outerHTML">
+              <i class="bi bi-trash"></i> Удалить группу
+            </button>
+          {% else %}
+            <button type="button" class="btn btn-sm btn-outline-primary ms-auto"
+                    hx-post="{% url 'scheduling:group_restore' group.pk %}" hx-target="#group-panel" hx-swap="outerHTML">
+              <i class="bi bi-arrow-counterclockwise"></i> Вернуть из архива
+            </button>
+          {% endif %}
+        </div>
+        </div>
+      {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% else %}
+<div id="group-panel" class="d-none"></div>
+{% endif %}

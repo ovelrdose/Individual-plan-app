@@ -8,11 +8,12 @@ from datetime import date, time
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.db.models import Q, QuerySet
+from django.db.models import Count, ProtectedError, Q, QuerySet
 
 from apps.accounts.access import departments_for, has_right, is_admin, require_right
 from apps.accounts.models import Right, User
 from apps.catalog.domain import minutes_between
+from apps.catalog.initial_data import EQUIPMENT_PLACE
 from apps.catalog.models import (
     SCHEDULED_KINDS,
     SESSION_KINDS,
@@ -21,13 +22,16 @@ from apps.catalog.models import (
     InstructorSlot,
     Procedure,
     ProcedureKind,
+    Section,
+    SectionBehavior,
 )
 from apps.live import events as live
 from apps.live import topics as live_topics
+from apps.org.models import Department
 from apps.programs.models import Prescription, Program, withdrawn_on
-from apps.staff.models import Instructor
+from apps.staff.models import Instructor, InstructorBlock, InstructorDuty
 
-from . import board_days
+from . import board_days, staff_changes
 from .domain import (
     Busy,
     EquipmentLoad,
@@ -494,6 +498,8 @@ class Rescheduled:
     reset: list[Prescription] = field(default_factory=list)  # выбор времени сброшен
     unpinned: list[Booking] = field(default_factory=list)  # закреплённые в старое время сняты
     displaced: list[Displaced] = field(default_factory=list)  # индивидуальные — в «Не распределены»
+    # «Ведение группы» закончилось — слот инструктора свободен (решение 82)
+    freed: list[staff_changes.FreedLead] = field(default_factory=list)
 
 
 def can_edit_group_schedule(user: User) -> bool:
@@ -550,6 +556,7 @@ def save_group_session(
     today = today or board_days.today()
     reset: list[Prescription] = []
     unpinned: list[Booking] = []
+    freed: list[staff_changes.FreedLead] = []
 
     def save() -> None:
         # Программы уже заблокированы — единый порядок блокировок.
@@ -557,13 +564,41 @@ def save_group_session(
         if not session.is_active:
             reset.extend(reset_choices([session.pk], user))
         unpinned.extend(stale_pinned([session.pk]))
+        freed.extend(_end_group_leads(user, [session.procedure_id], [session.pk], today))
 
     with watch_displaced() as displaced:
         programs = replan_for_group(session.procedure_id, today=today, save=save)
     # Завершённые курсы не пересобираются — их закреплённые остаются и в список не идут.
     replanned = {program.pk for program in programs}
     unpinned = [booking for booking in unpinned if booking.program_id in replanned]
-    return Rescheduled(programs, reset, unpinned, displaced)
+    return Rescheduled(programs, reset, unpinned, displaced, freed)
+
+
+def _end_group_leads(
+    user: User, procedure_ids: list[int], session_ids: list[int], today: date
+) -> list[staff_changes.FreedLead]:
+    """Занятие выключено или перенесено: «Ведение группы» на него заканчивается сегодня
+    (решение 82). Вызывать под блокировкой программ, уже после сохранения занятия.
+
+    Инструкторов блокируем в общем порядке: программы → тренажёры → инструкторы →
+    шахматки. Пересборка следом снова возьмёт те же тренажёры — они уже наши, поэтому
+    тренажёры программ с этой группой блокируем раньше инструкторов."""
+    instructors = staff_changes.group_lead_instructors(session_ids)
+    if not instructors:
+        return []
+    targets = Program.objects.filter(
+        Q(prescriptions__procedure__in=procedure_ids)
+        | Q(prescriptions__pool_group__in=procedure_ids),
+        end_date__gte=today,
+    ).values("pk")
+    equipment = set(
+        Prescription.objects.filter(
+            program__in=targets, procedure__equipment__isnull=False
+        ).values_list("procedure__equipment", flat=True)
+    )
+    list(Equipment.objects.select_for_update().filter(pk__in=equipment).order_by("pk"))
+    list(Instructor.objects.select_for_update().filter(pk__in=instructors).order_by("pk"))
+    return staff_changes.end_group_leads(user, session_ids, today)
 
 
 def stale_pinned(session_ids: list[int]) -> list[Booking]:
@@ -595,6 +630,362 @@ def save_equipment(user: User, equipment: Equipment, *, today: date | None = Non
     # тренажёра, обратный порядок дал бы взаимную блокировку.
     programs = replan_for_equipment(equipment.pk, today=today, save=equipment.save)
     return Rescheduled(programs)
+
+
+# --- Разделы, группы и тренажёры на экране «Групповые занятия» (FR-SCH-18, решение 82) -----
+
+
+def schedule_groups(user: User) -> QuerySet[Procedure]:
+    """Группы, которые специалист видит на экране, — и выключенные (они внизу, серые)."""
+    groups = Procedure.objects.filter(kind__in=SESSION_KINDS, group_choice=False)
+    if not can_edit_group_schedule(user):
+        return groups.none()
+    if not is_admin(user):
+        groups = groups.filter(Q(department=None) | Q(department__in=departments_for(user)))
+    return groups.distinct()
+
+
+def group_departments(user: User) -> QuerySet[Department]:
+    """Отделения, которым специалист может завести группу: свои; администратор — любые."""
+    return departments_for(user).order_by("name")
+
+
+def sections_with_counts(user: User) -> list[Section]:
+    """Разделы по порядку вкладок; ``sessions_count`` — действующих занятий действующих групп
+    раздела, которые видит специалист (архив не считается)."""
+    counts = dict(
+        GroupSession.objects.filter(procedure__in=group_schedule_procedures(user), is_active=True)
+        .values_list("procedure__section")
+        .annotate(total=Count("pk"))
+        .values_list("procedure__section", "total")
+    )
+    sections = list(Section.objects.order_by("order", "name"))
+    for section in sections:
+        section.sessions_count = counts.get(section.pk, 0)
+    return sections
+
+
+def section_groups(user: User, section: Section) -> list[Procedure]:
+    """Группы раздела: ``session_list`` — действующие времена, ``archived_sessions`` — времена
+    в архиве (выключенные). Действующие группы по названию, группы в архиве — в конце."""
+    groups = list(
+        schedule_groups(user)
+        .filter(section=section)
+        .select_related("department")
+        .prefetch_related("sessions")
+        .order_by("-is_active", "name")
+    )
+    for group in groups:
+        every = sorted(group.sessions.all(), key=lambda s: (s.start_time, s.pk))
+        group.session_list = [s for s in every if s.is_active]
+        group.archived_sessions = [s for s in every if not s.is_active]
+        group.active_sessions = len(group.session_list)
+    return groups
+
+
+@transaction.atomic
+def save_section(user: User, section: Section) -> Section:
+    """Новый раздел или правка: название, поведение, порядок. Поведение задаёт вид групп
+    раздела, поэтому у раздела с группами его не меняют (решение 82)."""
+    require_group_schedule(user)
+    if section.pk:
+        old = Section.objects.select_for_update().get(pk=section.pk)
+        count = old.procedures.count()
+        if old.behavior != section.behavior and count:
+            raise ScheduleError(
+                f"Поведение раздела «{old.name}» не меняется: в нём есть группы ({count}). "
+                "Заведите новый раздел с нужным поведением."
+            )
+    section.full_clean()
+    section._history_user = user
+    section.save()
+    return section
+
+
+@transaction.atomic
+def delete_section(user: User, section: Section) -> None:
+    """Удалить можно только пустой раздел: группы удалять нельзя, только выключать."""
+    require_group_schedule(user)
+    section = Section.objects.select_for_update().get(pk=section.pk)
+    count = section.procedures.count()
+    if count:
+        raise ScheduleError(
+            f"В разделе «{section.name}» есть группы ({count}), в том числе выключенные — "
+            "удалить можно только пустой раздел. Перенесите группы в другой раздел с тем же "
+            "поведением."
+        )
+    section._history_user = user
+    section.delete()
+
+
+def procedure_name_taken(procedure: Procedure) -> str:
+    """Текст ошибки, если в отделении (или среди общих) уже есть процедура с таким названием —
+    повторяет ограничение ``unique_procedure_per_department`` понятным текстом."""
+    same = Procedure.objects.filter(
+        name__iexact=procedure.name.strip(), department=procedure.department_id
+    )
+    if procedure.pk:
+        same = same.exclude(pk=procedure.pk)
+    if not same.exists():
+        return ""
+    where = f"в отделении {procedure.department}" if procedure.department_id else "среди общих"
+    return f"Процедура «{procedure.name.strip()}» уже есть в справочнике {where}."
+
+
+def _check_group(group: Procedure, section: Section) -> None:
+    group.name = group.name.strip()
+    group.card_label = (group.card_label or "").strip() or group.name
+    group.kind = section.behavior
+    group.section = section
+    if error := procedure_name_taken(group):
+        raise ScheduleError(error)
+    group.full_clean()
+
+
+@dataclass(frozen=True)
+class GroupSaved:
+    """Итог правки группы на экране: что сохранено и что изменилось у программ."""
+
+    group: Procedure
+    created: bool = False
+    rescheduled: Rescheduled | None = None  # группу выключили — расписание пересобрано
+
+
+@transaction.atomic
+def create_group(user: User, group: Procedure, times: list[time]) -> GroupSaved:
+    """Новая группа и сразу её занятия (решение 82). Вид — из раздела; длительность занятий —
+    длительность группы. Программ с новой группой ещё нет — пересобирать нечего."""
+    # Группа отделения — только для тех, кто в нём работает (решение 3).
+    require_group_schedule(user, group)
+    if group.section_id is None:
+        raise ScheduleError("Выберите раздел.")
+    # Раздел блокируем: параллельная смена его поведения не должна разойтись с видом группы.
+    section = Section.objects.select_for_update().get(pk=group.section_id)
+    if not times:
+        raise ScheduleError("Укажите хотя бы одно время занятия.")
+    repeated = sorted({start for start in times if times.count(start) > 1})
+    if repeated:
+        raise ScheduleError(f"Время указано дважды: {', '.join(_hhmm(t) for t in repeated)}.")
+    group.equipment = None
+    group.group_choice = group.evening_individual = False
+    group.is_active = True
+    group.default_duration_min = group.default_duration_min or 30
+    _check_group(group, section)
+    group._history_user = user
+    group.save()
+    for start in sorted(times):
+        session = GroupSession(
+            procedure=group, start_time=start, duration_min=group.default_duration_min
+        )
+        session.full_clean()
+        session._history_user = user
+        session.save()
+    return GroupSaved(group, created=True)
+
+
+@transaction.atomic
+def save_group(user: User, group: Procedure, *, today: date | None = None) -> GroupSaved:
+    """Правка группы: названия, синонимы, место, отделение, раздел, «действует».
+
+    Перенос — только в раздел с тем же поведением: вид группы определяет её место в
+    расписании, а у текущих программ уже стоят её занятия. Выключение выключает и все её
+    занятия — дальше как при выключении занятия (FR-CAT-3, решение 81): текущие программы
+    пересобираются, выбор времени сбрасывается, закреплённые снимаются, и всё это — на экране.
+    """
+    # Строку группы не блокируем до программ: пересборка вставляет занятия со ссылкой на эту
+    # процедуру (FOR KEY SHARE), и блокировка группы раньше программ замкнула бы цикл с
+    # параллельной правкой назначения. Порядок как в save_group_session: программы → запись.
+    old = Procedure.objects.filter(pk=group.pk).first()
+    if old is None or not old.is_group:
+        raise ScheduleError("Группа не найдена. Обновите страницу.")
+    # И прежнее, и новое отделение группы — только свои (решение 3).
+    require_group_schedule(user, old)
+    require_group_schedule(user, group)
+    if group.section_id is None:
+        raise ScheduleError("Выберите раздел.")
+    section = Section.objects.select_for_update().get(pk=group.section_id)
+    if section.behavior != old.kind:
+        behavior = SectionBehavior(old.kind).label
+        raise ScheduleError(
+            f"Группу «{old.name}» можно перенести только в раздел с поведением «{behavior}»: "
+            "от поведения зависит её место в расписании пациентов и инструкторов. Нужна группа "
+            "с другим поведением — заведите новую."
+        )
+    _check_group(group, section)
+    group._history_user = user
+    if not (old.is_active and not group.is_active):
+        group.save()
+        return GroupSaved(group)
+
+    today = today or board_days.today()
+    reset: list[Prescription] = []
+    unpinned: list[Booking] = []
+    freed: list[staff_changes.FreedLead] = []
+
+    def save() -> None:
+        # Программы уже заблокированы — единый порядок блокировок.
+        group.save()
+        sessions = list(group.sessions.filter(is_active=True))
+        for session in sessions:
+            session.is_active = False
+            session._history_user = user
+            session.save(update_fields=["is_active"])
+        ids = [session.pk for session in sessions]
+        reset.extend(reset_choices(ids, user))
+        unpinned.extend(stale_pinned(ids))
+        every = list(group.sessions.values_list("pk", flat=True))
+        freed.extend(_end_group_leads(user, [group.pk], every, today))
+
+    with watch_displaced() as displaced:
+        programs = replan_for_group(group.pk, today=today, save=save)
+    replanned = {program.pk for program in programs}
+    unpinned = [booking for booking in unpinned if booking.program_id in replanned]
+    return GroupSaved(group, rescheduled=Rescheduled(programs, reset, unpinned, displaced, freed))
+
+
+# --- Удаление и архив (решение 82) -------------------------------------------------------
+# Ни разу не использованное удаляется совсем; использованное уходит в архив — это выключение
+# с пересборкой, сбросом выбора и окончанием «Ведения группы». Ссылки на занятие и группу:
+# занятия пациентов (Booking), назначения (Prescription: procedure, pool_group,
+# group_session), распорядок и разовые блоки инструкторов. Журнал (история) — не ссылка.
+
+
+@dataclass(frozen=True)
+class Removed:
+    """Итог «Удалить»: удалено совсем или ушло в архив, и что изменилось у программ."""
+
+    archived: bool
+    rescheduled: Rescheduled | None = None
+
+
+def session_is_used(session: GroupSession) -> bool:
+    return (
+        Booking.objects.filter(group_session=session).exists()
+        or Prescription.objects.filter(group_session=session).exists()
+        or InstructorDuty.objects.filter(group_session=session).exists()
+        or InstructorBlock.objects.filter(group_session=session).exists()
+    )
+
+
+def group_is_used(group: Procedure) -> bool:
+    return (
+        Prescription.objects.filter(Q(procedure=group) | Q(pool_group=group)).exists()
+        or Booking.objects.filter(procedure=group).exists()
+        or any(session_is_used(session) for session in group.sessions.all())
+    )
+
+
+def affected_programs(group: Procedure, today: date | None = None) -> int:
+    """Сколько текущих программ пересоберётся, если тронуть группу или её время."""
+    return (
+        Program.objects.filter(
+            Q(prescriptions__procedure=group) | Q(prescriptions__pool_group=group),
+            end_date__gte=today or board_days.today(),
+        )
+        .distinct()
+        .count()
+    )
+
+
+@transaction.atomic
+def delete_group_session(
+    user: User, session: GroupSession, *, today: date | None = None
+) -> Removed:
+    """«Удалить» время группы: неиспользованное — совсем (программы с группой пересобираются:
+    у них стало меньше вариантов времени), использованное — в архив."""
+    require_group_schedule(user, session.procedure)
+    if not session.is_active:
+        raise ScheduleError("Это время уже в архиве.")
+    if session_is_used(session):
+        session.is_active = False
+        return Removed(True, save_group_session(user, session, today=today))
+
+    def delete() -> None:
+        session._history_user = user
+        try:
+            session.delete()
+        except ProtectedError:
+            raise ScheduleError(
+                "Это время только что начали использовать — обновите страницу."
+            ) from None
+
+    programs = replan_for_group(session.procedure_id, today=today, save=delete)
+    return Removed(False, Rescheduled(programs))
+
+
+@transaction.atomic
+def restore_group_session(
+    user: User, session: GroupSession, *, today: date | None = None
+) -> Rescheduled:
+    """«Вернуть из архива» время группы: оно снова действует, программы пересобираются."""
+    if not session.procedure.is_active:
+        raise ScheduleError("Сначала верните из архива саму группу.")
+    session.is_active = True
+    return save_group_session(user, session, today=today)
+
+
+@transaction.atomic
+def delete_group(user: User, group: Procedure, *, today: date | None = None) -> Removed:
+    """«Удалить» группу: неиспользованную — совсем, вместе с её временами; использованную —
+    в архив (выключение группы, ``save_group``)."""
+    require_group_schedule(user, group)
+    if not group.is_group:
+        raise ScheduleError("Группа не найдена. Обновите страницу.")
+    if not group.is_active:
+        raise ScheduleError("Группа уже в архиве.")
+    if group_is_used(group):
+        # Архив — путь выключения: программы блокируются раньше строки группы (save_group).
+        group.is_active = False
+        return Removed(True, save_group(user, group, today=today).rescheduled)
+    # «Совсем» программ не трогает — блокируем строку группы: новое назначение
+    # (FOR KEY SHARE) подождёт и не сошлётся на удалённую. Под блокировкой проверяем снова.
+    locked = Procedure.objects.select_for_update().get(pk=group.pk)
+    if group_is_used(locked):
+        raise ScheduleError("Группу только что начали использовать — обновите страницу.")
+    for session in locked.sessions.all():
+        session._history_user = user
+        session.delete()
+    locked._history_user = user
+    locked.delete()
+    return Removed(False)
+
+
+@transaction.atomic
+def restore_group(user: User, group: Procedure, *, today: date | None = None) -> GroupSaved:
+    """«Вернуть из архива» группу: она снова в поиске и выборе; её времена остаются в архиве
+    и возвращаются по одному."""
+    group.is_active = True
+    return save_group(user, group, today=today)
+
+
+@transaction.atomic
+def create_equipment(
+    user: User, equipment: Equipment, *, card_label: str = "", synonyms: list[str] | None = None
+) -> Equipment:
+    """Новый тренажёр и его процедура вида «Тренажёр» — как в ``load_initial_catalog``:
+    без процедуры тренажёр нельзя назначить (решение 82)."""
+    require_group_schedule(user)
+    equipment.name = equipment.name.strip()
+    if Equipment.objects.filter(name__iexact=equipment.name).exists():
+        raise ScheduleError(f"Тренажёр «{equipment.name}» уже есть.")
+    procedure = Procedure(
+        name=equipment.name,
+        card_label=card_label.strip() or equipment.name,
+        synonyms=list(synonyms or []),
+        kind=ProcedureKind.EQUIPMENT,
+        default_duration_min=equipment.duration_min,
+        place=EQUIPMENT_PLACE,
+    )
+    if error := procedure_name_taken(procedure):
+        raise ScheduleError(error)
+    equipment.full_clean()
+    equipment._history_user = user
+    equipment.save()
+    procedure.equipment = equipment
+    procedure.full_clean()
+    procedure._history_user = user
+    procedure.save()
+    return equipment
 
 
 def replan_for_group(

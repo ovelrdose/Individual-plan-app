@@ -6,27 +6,54 @@
   <h1 class="h3">Групповые занятия</h1>
   <p class="text-body-secondary">
     Расписание одинаково каждый день. После сохранения расписание текущих программ с этой группой
-    или тренажёром пересобирается сразу. Новые группы и тренажёры заводятся в справочниках.
+    или тренажёром пересобирается сразу. Вкладки — разделы групп; группу и её времена
+    меняют кнопкой <i class="bi bi-gear"></i>.
   </p>
 
   <ul class="nav nav-tabs mb-3">
-    <li class="nav-item">
-      <a class="nav-link {% if tab == 'groups' %}active{% endif %}" href="{% url 'scheduling:group_schedule' %}"
-         {% if tab == 'groups' %}aria-current="page"{% endif %}>
-        Группы ЛФК, ДС и бассейн <span class="badge text-bg-secondary">{{ sessions_count }}</span>
-      </a>
-    </li>
+    {% for item in sections %}
+      <li class="nav-item">
+        {% if tab == "groups" and item.pk == section.pk %}
+          <a class="nav-link active" href="{% url 'scheduling:group_schedule' %}?section={{ item.pk }}" aria-current="page">{{ item.name }} <span class="badge text-bg-secondary">{{ item.sessions_count }}</span></a>
+        {% else %}
+          <a class="nav-link" href="{% url 'scheduling:group_schedule' %}?section={{ item.pk }}">{{ item.name }} <span class="badge text-bg-secondary">{{ item.sessions_count }}</span></a>
+        {% endif %}
+      </li>
+    {% endfor %}
     <li class="nav-item">
       <a class="nav-link {% if tab == 'equipment' %}active{% endif %}" href="{% url 'scheduling:group_schedule' %}?tab=equipment"
-         {% if tab == 'equipment' %}aria-current="page"{% endif %}>
-        Тренажёры <span class="badge text-bg-secondary">{{ equipment_count }}</span>
-      </a>
+         {% if tab == 'equipment' %}aria-current="page"{% endif %}>Тренажёры <span class="badge text-bg-secondary">{{ equipment_count }}</span></a>
+    </li>
+    <li class="nav-item ms-auto">
+      <a class="nav-link" href="{% url 'scheduling:section_add' %}"><i class="bi bi-plus-lg"></i> Новый раздел</a>
     </li>
   </ul>
 
+  {% if section_form %}
+    {% include "scheduling/_section_form.html" with form=section_form editing=section_editing %}
+  {% endif %}
+
+  {# Таблица только для чтения, правка — в модальном окне (static/js/prescriptions.js): панель #}
+  {# группы или тренажёра приходит внутрь окна, таблица рядом обновляется через hx-swap-oob. #}
   {% if tab == "equipment" %}
     {% include "scheduling/_equipment.html" %}
-  {% else %}
+  {% elif section %}
     {% include "scheduling/_group_sessions.html" %}
+  {% elif not section_form %}
+    <p class="text-body-secondary">Разделов пока нет — заведите первый кнопкой «Новый раздел».</p>
+  {% endif %}
+
+  {% if tab == "equipment" or section %}
+    <div class="modal fade" id="edit-modal" tabindex="-1" aria-label="Правка" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered {% if tab == 'equipment' %}modal-lg{% else %}modal-xl{% endif %}">
+        <div class="modal-content">
+          {% if tab == "equipment" %}
+            <div id="equipment-panel" class="d-none"></div>
+          {% else %}
+            <div id="group-panel" class="d-none"></div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
   {% endif %}
 {% endblock %}

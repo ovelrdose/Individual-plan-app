@@ -9,7 +9,15 @@ from apps.org.models import Department
 
 from . import initial_data as data
 from .domain import normalize_name
-from .models import Equipment, GroupSession, InstructorSlot, Procedure, ProcedureKind
+from .models import (
+    SESSION_KINDS,
+    Equipment,
+    GroupSession,
+    InstructorSlot,
+    Procedure,
+    ProcedureKind,
+    Section,
+)
 from .schedule_file import read_schedule
 
 
@@ -116,10 +124,18 @@ def _spec_for(name: str, specs: tuple[data.ProcedureSpec, ...]) -> data.Procedur
 def _get_or_create_procedure(
     spec: data.ProcedureSpec, report: LoadReport, equipment: Equipment | None = None
 ) -> Procedure:
+    existing = Procedure.objects.filter(name__iexact=spec.name, department=None).first()
+    if existing is not None:
+        report.count("процедуры", False)
+        return existing
+    # Новая группа попадает в первый раздел своего вида; раздела нет — заводится (решение 82).
+    # Уже заведённые не трогаем: раздел могли поменять на экране.
+    is_group = spec.kind in SESSION_KINDS and not spec.group_choice
     procedure, created = Procedure.objects.get_or_create(
         name=spec.name,
         department=None,
         defaults={
+            "section": Section.default_for(spec.kind) if is_group else None,
             "card_label": spec.card_label,
             "kind": spec.kind,
             "default_duration_min": spec.duration_min,

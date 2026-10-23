@@ -88,3 +88,8 @@ body {
 [data-drag-handle] { cursor: grab; }
 .prescription-row.dragging { opacity: .4; }
 .prescription-panel { position: sticky; top: 1rem; }
+
+/* Окно правки группы: черта между полями группы и её временами — только в две колонки. */
+@media (min-width: 992px) {
+  .border-start-lg { border-left: 1px solid var(--bs-border-color); }
+}

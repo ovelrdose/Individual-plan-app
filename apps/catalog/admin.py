@@ -6,9 +6,15 @@ from simple_history.admin import SimpleHistoryAdmin
 
 from apps.accounts.access import departments_for, is_admin
 from apps.accounts.admin_access import RightAdminMixin
-from apps.scheduling.services import replan_for_equipment, replan_for_group, reset_choices
+from apps.accounts.models import Right
+from apps.scheduling.services import (
+    replan_for_equipment,
+    replan_for_group,
+    reset_choices,
+    save_section,
+)
 
-from .models import SESSION_KINDS, Equipment, GroupSession, InstructorSlot, Procedure
+from .models import SESSION_KINDS, Equipment, GroupSession, InstructorSlot, Procedure, Section
 
 
 class SynonymsField(SimpleArrayField):
@@ -37,6 +43,7 @@ class ProcedureForm(forms.ModelForm):
             "name",
             "card_label",
             "kind",
+            "section",
             "synonyms",
             "default_duration_min",
             "place",
@@ -54,6 +61,20 @@ class GroupSessionInline(RightAdminMixin, admin.TabularInline):
     fields = ["start_time", "duration_min", "place", "is_active"]
 
 
+@admin.register(Section)
+class SectionAdmin(RightAdminMixin, SimpleHistoryAdmin):
+    """Разделы «Групповых занятий» (решение 82); обычно их ведут на самом экране. Сохранение —
+    тем же сервисом, что на экране: он блокирует раздел, и смена поведения не разойдётся с
+    видом параллельно добавленной группы."""
+
+    right = Right.GROUP_SCHEDULE
+    list_display = ["name", "behavior", "order"]
+    ordering = ["order", "name"]
+
+    def save_model(self, request, obj, form, change):
+        save_section(request.user, obj)
+
+
 @admin.register(Procedure)
 class ProcedureAdmin(RightAdminMixin, SimpleHistoryAdmin):
     form = ProcedureForm
@@ -62,13 +83,22 @@ class ProcedureAdmin(RightAdminMixin, SimpleHistoryAdmin):
         "name",
         "card_label",
         "kind",
+        "section",
         "default_duration_min",
         "place",
         "department",
         "is_active",
     ]
-    list_filter = ["kind", "is_active", "department"]
+    list_filter = ["kind", "section", "is_active", "department"]
     search_fields = ["name", "card_label", "synonyms"]
+
+    def get_readonly_fields(self, request, obj=None):
+        # Группу выключают на экране «Групповые занятия»: там выключаются её занятия и
+        # заканчивается ведение группы инструкторами (решение 82).
+        readonly = list(super().get_readonly_fields(request, obj))
+        if obj is not None and obj.section_id is not None:
+            readonly.append("is_active")
+        return readonly
 
     def get_queryset(self, request):
         # Специалист ФР видит общие процедуры и процедуры своих отделений.

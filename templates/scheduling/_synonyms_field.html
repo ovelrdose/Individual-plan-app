@@ -1,0 +1,17 @@
+{# Синонимы — по полю на синоним: сохранённые рисует сервер, новые пустые поля добавляет Alpine.js. #}
+<div class="mb-3" x-data="{ extra: 0 }">
+  <span class="form-label d-block">{{ field.label }}</span>
+  {% for value in field.value %}{% if value %}
+    <input type="text" name="{{ field.html_name }}" value="{{ value }}" maxlength="100"
+           class="form-control form-control-sm mb-1" aria-label="Синоним">
+  {% endif %}{% endfor %}
+  <input type="text" name="{{ field.html_name }}" maxlength="100"
+         class="form-control form-control-sm mb-1" aria-label="Синоним">
+  <template x-for="i in extra" :key="i">
+    <input type="text" name="{{ field.html_name }}" maxlength="100"
+           class="form-control form-control-sm mb-1" aria-label="Синоним">
+  </template>
+  <button type="button" class="btn btn-sm btn-link px-0" @click="extra++"><i class="bi bi-plus-lg"></i> добавить синоним</button>
+  {% for e in field.errors %}<div class="invalid-feedback d-block">{{ e }}</div>{% endfor %}
+  <div class="form-text">{{ field.help_text }} Пустые поля не сохраняются.</div>
+</div>

@@ -1,0 +1,8 @@
+{# Окно, шаг, длительность и вместимость тренажёра — общие поля новой записи и правки. #}
+<div class="row g-2">
+  <div class="col-6">{% include "includes/form_field.html" with field=form.window_start %}</div>
+  <div class="col-6">{% include "includes/form_field.html" with field=form.window_end %}</div>
+  <div class="col-4">{% include "includes/form_field.html" with field=form.step_min %}</div>
+  <div class="col-4">{% include "includes/form_field.html" with field=form.duration_min %}</div>
+  <div class="col-4">{% include "includes/form_field.html" with field=form.capacity %}</div>
+</div>

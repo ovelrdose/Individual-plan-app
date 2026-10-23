@@ -5,7 +5,7 @@ from datetime import time
 import pytest
 from django.urls import reverse
 
-from apps.catalog.models import Equipment, GroupSession, Procedure, ProcedureKind
+from apps.catalog.models import Equipment, GroupSession, Procedure, ProcedureKind, Section
 
 
 @pytest.fixture
@@ -23,17 +23,38 @@ def groups(db) -> None:
 
 
 def test_groups_tab(client, rehab, groups):
+    """Вкладка на раздел (решение 82): первым — «ЛФК», группы ДС — во вкладке «ДС»."""
+    client.force_login(rehab)
+    page = reverse("scheduling:group_schedule")
+
+    html = client.get(page).content.decode()
+
+    assert "Новая группа" in html and 'id="group-panel" class="d-none"' in html
+    assert "Тренажёр-тест" not in html  # тренажёры — на своей вкладке
+    table = html[html.index("<table") :]
+    assert "ЛФК: колено" in table and "ДС: острая спина" not in table
+    assert "занятий в день" not in table  # выключенное 12:00 у колена — в архиве
+    assert "В архиве (1)" in table
+
+    ds = Section.objects.get(name="ДС")
+    html = client.get(page, {"section": ds.pk}).content.decode()
+    table = html[html.index("<table") :]
+    assert "ДС: острая спина" in table and "ЛФК: колено" not in table
+    # Времена одной группы подряд, по порядку.
+    assert table.index("8:15–8:45") < table.index("16:30–17:00")
+    assert table.count("занятий в день: 2") == 1
+
+
+def test_tabs_in_section_order_with_counts(client, rehab, groups):
     client.force_login(rehab)
 
     html = client.get(reverse("scheduling:group_schedule")).content.decode()
 
-    assert "Добавить занятие группы" in html
-    assert "Тренажёр-тест" not in html  # тренажёры — на своей вкладке
-    html = html[html.index("<table") :]  # названия групп есть и в списке формы
-    # ЛФК раньше ДС, времена одной группы подряд, хотя 10:00 между 8:15 и 16:30.
-    assert html.index("ЛФК: колено") < html.index("ДС: острая спина")
-    assert html.index("8:15–8:45") < html.index("16:30–17:00")
-    assert html.count("занятий в день: 2") == 1  # выключенное 12:00 у колена не считается
+    tabs = html[html.index("nav-tabs") : html.index("Новый раздел")]
+    assert tabs.index("ЛФК") < tabs.index("ДС") < tabs.index("Бассейн") < tabs.index("Тренажёры")
+    # Число — действующие занятия: выключенное 12:00 у колена в архиве и не считается.
+    assert 'aria-current="page">ЛФК <span class="badge text-bg-secondary">1</span>' in tabs
+    assert 'ДС <span class="badge text-bg-secondary">2</span>' in tabs
 
 
 def test_equipment_tab(client, rehab, groups):
@@ -43,7 +64,7 @@ def test_equipment_tab(client, rehab, groups):
 
     assert "Тренажёр-тест" in html
     assert "Добавить занятие группы" not in html
-    assert 'aria-current="page">\n        Тренажёры' in html
+    assert 'aria-current="page">Тренажёры' in html
 
 
 def test_edit_cancel_returns_fragment(client, rehab, groups):

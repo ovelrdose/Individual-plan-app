@@ -615,13 +615,23 @@ class TestPageVariants:
 # --- Экран «Групповые занятия» и админка: итог правки занятия -----------------------------
 
 
+def htmx_delete(client, item: GroupSession) -> str:
+    """«Удалить» использованное время на экране — архив (решение 82)."""
+    response = client.post(
+        reverse("scheduling:session_delete", args=[item.pk]),
+        {"confirm": "1"},
+        HTTP_HX_REQUEST="true",
+    )
+    assert response.status_code == 200
+    return response.content.decode()
+
+
 class TestGroupScheduleScreen:
     def edit(self, client, item: GroupSession, **changes) -> str:
         data = {
             "edit-start_time": f"{item.start_time:%H:%M}",
             "edit-duration_min": str(item.duration_min),
             "edit-place": item.place,
-            "edit-is_active": "on",
         }
         data |= changes
         data = {key: value for key, value in data.items() if value is not None}
@@ -639,7 +649,7 @@ class TestGroupScheduleScreen:
         choose_group_time(doctor, item, late)
         client.force_login(rehab)
 
-        html = self.edit(client, late, **{"edit-is_active": None})
+        html = htmx_delete(client, late)
 
         assert "Выбор времени сброшен" in html and "Сбросов" in html
         item.refresh_from_db()

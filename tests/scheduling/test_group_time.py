@@ -605,7 +605,7 @@ class TestNewSessionEndToEnd:
         item = add_group(doctor, program, shoulder)
         client.force_login(rehab)
         url = reverse("scheduling:session_add")
-        data = {"procedure": shoulder.pk, "duration_min": "30", "place": "", "is_active": "on"}
+        data = {"procedure": shoulder.pk, "duration_min": "30", "place": ""}
 
         htmx_html = htmx(client, url, data | {"start_time": "08:15"})
         plain = client.post(url, data | {"start_time": "16:00"})

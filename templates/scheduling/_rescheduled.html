@@ -20,6 +20,12 @@
       {% for booking in result.unpinned %}{{ booking.date|date:"d.m" }} {{ booking.program.room_label }} {{ booking.program.surname }}{% if booking.program.department_id != current_department.pk %} ({{ booking.program.department.name }}){% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}.
     </div>
   {% endif %}
+  {% if result.freed %}
+    <div class="alert alert-info py-2">
+      «Ведение группы» закончилось сегодня — с завтра слот свободен:
+      {% for item in result.freed %}{{ item }}{% if not forloop.last %}, {% endif %}{% endfor %}.
+    </div>
+  {% endif %}
   {% if result.displaced %}
     <div class="alert alert-warning py-2">
       Индивидуальные в «Не распределены» — пересеклись с группой:

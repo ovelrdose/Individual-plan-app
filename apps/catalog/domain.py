@@ -11,6 +11,11 @@ def add_minutes(start: time, minutes: int) -> time:
     return moment.time()
 
 
+def ends_same_day(start: time, minutes: int) -> bool:
+    """Занятие с ``start`` длительностью ``minutes`` кончается до полуночи."""
+    return start.hour * 60 + start.minute + minutes < 24 * 60
+
+
 def minutes_between(start: time, end: time) -> int:
     delta = datetime.combine(date.min, end) - datetime.combine(date.min, start)
     return int(delta.total_seconds() // 60)

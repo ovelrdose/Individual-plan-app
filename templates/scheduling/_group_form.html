@@ -1,0 +1,39 @@
+{# Поля группы в окне правки: новая группа (сразу с временами занятий) или правка (решение 82). #}
+{# Поля-списки: сохранённые значения рисует сервер, новые пустые поля добавляет Alpine.js. #}
+<form hx-post="{% if editing %}{% url 'scheduling:group_edit' editing.pk %}{% else %}{% url 'scheduling:group_add' section.pk %}{% endif %}"
+      hx-target="#group-panel" hx-swap="outerHTML">
+  {% for e in form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
+  {# Поля попарно в строку: окно должно помещаться на экран без прокрутки. #}
+  <div class="row g-2">
+    <div class="col-md-6">{% include "includes/form_field.html" with field=form.name %}</div>
+    <div class="col-md-6">{% include "includes/form_field.html" with field=form.card_label %}</div>
+  </div>
+  {% include "scheduling/_synonyms_field.html" with field=form.synonyms %}
+  <div class="row g-2">
+    <div class="col-4 col-md-3">{% include "includes/form_field.html" with field=form.default_duration_min %}</div>
+    <div class="col-8 col-md-9">{% include "includes/form_field.html" with field=form.place %}</div>
+    <div class="col-md-6">{% include "includes/form_field.html" with field=form.department %}</div>
+    <div class="col-md-6">{% include "includes/form_field.html" with field=form.section %}</div>
+  </div>
+  {% if form.times %}
+    <div class="mb-3" x-data="{ extra: 0 }">
+      <span class="form-label d-block">{{ form.times.label }} <span class="text-danger">*</span></span>
+      <div class="d-flex flex-wrap gap-1">
+        {% for value in form.times.value %}{% if value %}
+          <input type="time" name="{{ form.times.html_name }}" value="{{ value }}" class="form-control form-control-sm w-auto" aria-label="Время">
+        {% endif %}{% endfor %}
+        <input type="time" name="{{ form.times.html_name }}" class="form-control form-control-sm w-auto" aria-label="Время">
+        <template x-for="i in extra" :key="i">
+          <input type="time" name="{{ form.times.html_name }}" class="form-control form-control-sm w-auto" aria-label="Время">
+        </template>
+      </div>
+      <button type="button" class="btn btn-sm btn-link px-0" @click="extra++"><i class="bi bi-plus-lg"></i> ещё время</button>
+      {% for e in form.times.errors %}<div class="invalid-feedback d-block">{{ e }}</div>{% endfor %}
+      <div class="form-text">Длительность занятий — как у группы. Потом времена правятся здесь же.</div>
+    </div>
+  {% elif editing %}
+    <p class="small text-body-secondary">Перенести можно только в раздел с тем же поведением.</p>
+  {% endif %}
+  <button type="submit" class="btn btn-success">Сохранить</button>
+  <button type="button" class="btn btn-link" data-panel-close>Отмена</button>
+</form>

@@ -16,6 +16,8 @@ class ProcedureRef:
     name: str
     kind: str
     synonyms: tuple[str, ...] = ()
+    # «Бассейн» без группы: группу выбирает специалист ФР (FR-CAT-2).
+    group_choice: bool = False
 
     def match_keys(self) -> list[str]:
         return [key for key in (normalize_name(t) for t in (self.name, *self.synonyms)) if key]
@@ -56,16 +58,34 @@ def _longest(key: str, procedures: list[ProcedureRef]) -> ProcedureRef | None:
 
 
 def _match_pool(key: str, procedures: list[ProcedureRef]) -> ProcedureRef | None:
+    """Строка про бассейн (FR-IMP-9, решение 82): сначала названия и синонимы групп бассейна
+    («Бассейн шея» — группа с таким синонимом), затем метки «верхн/нижн/спин», затем общий
+    «Бассейн». Слова «бассейн» и «ЛФК в воде» сами по себе группу не выбирают: иначе новая
+    группа без меток забирала бы любую строку «Бассейн»."""
     pools = [p for p in procedures if p.kind == "POOL"]
-    for group in POOL_GROUPS:
-        if group in key:
-            found = next((p for p in pools if group in normalize_name(p.name)), None)
+    groups = [p for p in pools if not p.group_choice]
+    best, best_length = None, 0
+    for group in groups:
+        for synonym in group.match_keys():
+            if _is_pool_word(synonym) or synonym not in key or len(synonym) <= best_length:
+                continue
+            best, best_length = group, len(synonym)
+    if best is not None:
+        return best
+    for marker in POOL_GROUPS:
+        if marker in key:
+            found = next((p for p in groups if marker in normalize_name(p.name)), None)
             if found:
                 return found
-    return next(
-        (p for p in pools if not any(group in normalize_name(p.name) for group in POOL_GROUPS)),
-        None,
-    )
+    return next((p for p in pools if p.group_choice), None)
+
+
+def _is_pool_word(key: str) -> bool:
+    """Ключ — только «бассейн» / «ЛФК в воде», без названия группы."""
+    rest = key
+    for word in ("лфк", *POOL_MARKERS):
+        rest = rest.replace(word, "")
+    return not rest
 
 
 # Опечатка — одна буква (решение 71). Короткие названия (ТБС, ШОП, Pablo) — только точно:

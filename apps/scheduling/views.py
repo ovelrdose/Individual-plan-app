@@ -1,5 +1,4 @@
 import ipaddress
-from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, time, timedelta
@@ -20,11 +19,11 @@ from django.views.decorators.http import require_POST
 from apps.cards.views import XLSX
 from apps.cards.xlsx.board import render_board
 from apps.catalog.models import (
-    SESSION_KINDS,
     Equipment,
     GroupSession,
     InstructorSlot,
     Procedure,
+    Section,
 )
 from apps.programs.models import Prescription, Program
 from apps.programs.services import get_program_or_404
@@ -32,7 +31,13 @@ from apps.programs.views import prescriptions_oob
 from apps.staff.models import Instructor
 
 from . import board, board_days, manual, reports, services, staff_changes
-from .forms import EquipmentForm, GroupSessionForm
+from .forms import (
+    EquipmentForm,
+    GroupForm,
+    GroupSessionForm,
+    NewEquipmentForm,
+    SectionForm,
+)
 from .models import GROUP_BOOKING_KINDS, Booking, BookingKind
 
 
@@ -129,47 +134,371 @@ def _schedule_response(
 
 def group_schedule(request: HttpRequest) -> HttpResponse:
     services.require_group_schedule(request.user)
-    # Группы и тренажёры — разные вкладки: таблицы длинные и правятся по отдельности.
-    tab = "equipment" if request.GET.get("tab") == "equipment" else "groups"
-    context = _equipment_context() if tab == "equipment" else _sessions_context(request)
+    # Вкладки — разделы групп и последней тренажёры (решение 82): таблицы длинные и правятся
+    # по отдельности.
+    if request.GET.get("tab") == "equipment":
+        return _page(request, equipment=True)
+    return _page(request, section=_section(request.GET.get("section")))
+
+
+def _page(
+    request: HttpRequest,
+    *,
+    section: Section | None = None,
+    equipment: bool = False,
+    status: int = 200,
+    **extra: Any,
+) -> HttpResponse:
+    sections = services.sections_with_counts(request.user)
+    if not equipment and section is None and sections:
+        section = sections[0]
+    context = _equipment_context() if equipment else _sessions_context(request, section)
     return render(
         request,
         "scheduling/group_schedule.html",
         {
             **context,
-            "tab": tab,
-            "sessions_count": len(services.group_sessions(request.user)),
+            **extra,
+            "tab": "equipment" if equipment else "groups",
+            "sections": sections,
+            "section": section,
             "equipment_count": Equipment.objects.count(),
         },
+        status=status,
+    )
+
+
+def _section(value: object) -> Section | None:
+    """Раздел из запроса; неизвестный или пустой — первый по порядку."""
+    text = str(value or "").strip()
+    section = (
+        Section.objects.filter(pk=int(text)).first() if text.isdigit() and len(text) < 19 else None
+    )
+    return section or Section.objects.order_by("order", "name").first()
+
+
+def section_add(request: HttpRequest) -> HttpResponse:
+    return _section_form(request, Section())
+
+
+def section_edit(request: HttpRequest, pk: int) -> HttpResponse:
+    return _section_form(request, get_object_or_404(Section, pk=pk))
+
+
+def _section_form(request: HttpRequest, section: Section) -> HttpResponse:
+    """Раздел — обычная форма (hx-boost): после сохранения меняются вкладки, поэтому
+    возвращается страница целиком."""
+    services.require_group_schedule(request.user)
+    form = SectionForm(request.POST or None, instance=section)
+    saved = (
+        request.method == "POST"
+        and form.is_valid()
+        and _save(form, services.save_section, request.user) is not None
+    )
+    if saved:
+        messages.success(request, f"Раздел «{section.name}» сохранён.")
+        return redirect(_section_url(section))
+    current = section if section.pk else _section(None)
+    return _page(request, section=current, section_form=form, section_editing=section)
+
+
+@require_POST
+def section_delete(request: HttpRequest, pk: int) -> HttpResponse:
+    services.require_group_schedule(request.user)
+    section = get_object_or_404(Section, pk=pk)
+    try:
+        services.delete_section(request.user, section)
+    except services.ScheduleError as error:
+        messages.error(request, str(error))
+        return redirect(_section_url(section))
+    messages.success(request, f"Раздел «{section.name}» удалён.")
+    return redirect("scheduling:group_schedule")
+
+
+def _section_url(section: Section) -> str:
+    return f"{reverse('scheduling:group_schedule')}?section={section.pk}"
+
+
+# Группа и тренажёр правятся в панели справа, как назначения на странице программы: действие
+# возвращает панель и — вне основной цели (hx-swap-oob) — таблицу раздела или тренажёров.
+
+
+def group_add(request: HttpRequest, section_pk: int) -> HttpResponse:
+    services.require_group_schedule(request.user)
+    section = get_object_or_404(Section, pk=section_pk)
+    form = GroupForm(
+        request.POST or None,
+        user=request.user,
+        prefix="group",
+        initial={"section": section, "default_duration_min": 30},
+    )
+    if request.method == "POST" and form.is_valid():
+        saved = _save(
+            form,
+            lambda user, group: services.create_group(user, group, form.cleaned_data["times"]),
+            request.user,
+        )
+        if saved is not None:
+            return _group_panel(
+                request, saved.group, message=f"Группа «{saved.group.name}» заведена."
+            )
+    return _group_panel(request, None, section=section, group_form=form)
+
+
+def _visible_group(request: HttpRequest, pk: int) -> Procedure:
+    return get_object_or_404(
+        services.schedule_groups(request.user).select_related("section"), pk=pk
+    )
+
+
+def group_edit(request: HttpRequest, pk: int) -> HttpResponse:
+    services.require_group_schedule(request.user)
+    group = _visible_group(request, pk)
+    if request.method != "POST":
+        return _group_panel(request, group)
+    section = group.section
+    form = GroupForm(request.POST, instance=group, user=request.user, prefix="group")
+    if form.is_valid():
+        saved = _save(form, services.save_group, request.user)
+        if saved is not None:
+            moved = saved.group.section_id != section.pk
+            message = f"Группа «{saved.group.name}» сохранена" + (
+                f" — теперь в разделе «{saved.group.section.name}»." if moved else "."
+            )
+            # Группу перенесли — остаёмся во вкладке, где её правили: итог виден здесь.
+            return _group_panel(request, saved.group, section=section, message=message)
+    group.refresh_from_db()
+    return _group_panel(request, group, group_form=form)
+
+
+@require_POST
+def group_delete(request: HttpRequest, pk: int) -> HttpResponse:
+    """«Удалить» группу — сначала шаг подтверждения в панели, потом действие (решение 82)."""
+    services.require_group_schedule(request.user)
+    group = _visible_group(request, pk)
+    if not request.POST.get("confirm"):
+        return _group_panel(request, group, confirm=_confirm(group, "group", group))
+    try:
+        removed = services.delete_group(request.user, group)
+    except services.ScheduleError as error:
+        return _group_panel(request, group, error=str(error))
+    if not removed.archived:
+        return _group_panel(
+            request, None, section=group.section, message=f"Группа «{group.name}» удалена."
+        )
+    group.refresh_from_db()
+    return _group_panel(
+        request,
+        group,
+        message=f"Группа «{group.name}» в архиве: её нет в поиске, в листе назначений и в "
+        "выборе групп, все её времена в архиве.",
+        result=removed.rescheduled,
+    )
+
+
+@require_POST
+def group_restore(request: HttpRequest, pk: int) -> HttpResponse:
+    services.require_group_schedule(request.user)
+    group = _visible_group(request, pk)
+    try:
+        services.restore_group(request.user, group)
+    except services.ScheduleError as error:
+        return _group_panel(request, group, error=str(error))
+    return _group_panel(
+        request,
+        group,
+        message=f"Группа «{group.name}» снова действует. Её времена в архиве — верните нужные.",
     )
 
 
 @require_POST
 def session_add(request: HttpRequest) -> HttpResponse:
+    """Новое время группы (панель группы, «+ время»)."""
     services.require_group_schedule(request.user)
     form = GroupSessionForm(request.POST, user=request.user)
-    result = None
     if form.is_valid():
+        group = form.cleaned_data["procedure"]
         result = _save(form, services.save_group_session, request.user)
         if result is not None:
-            form = None
-    return _sessions_response(request, add_form=form, result=result)
+            return _group_panel(request, group, result=result)
+    else:
+        group = _posted_group(request, form)
+        if group is None:
+            raise Http404("Группа не найдена.")
+    return _group_panel(request, group, new_session_form=form)
+
+
+def _posted_group(request: HttpRequest, form) -> Procedure | None:
+    value = str(form["procedure"].value() or "")
+    if not value.isdigit() or len(value) > 18:
+        return None
+    return services.group_schedule_procedures(request.user).filter(pk=int(value)).first()
+
+
+def _visible_session(request: HttpRequest, pk: int, *, active_group: bool = True) -> GroupSession:
+    groups = (
+        services.group_schedule_procedures(request.user)
+        if active_group
+        else services.schedule_groups(request.user)
+    )
+    return get_object_or_404(
+        GroupSession.objects.filter(procedure__in=groups).select_related("procedure__section"),
+        pk=pk,
+    )
 
 
 def session_edit(request: HttpRequest, pk: int) -> HttpResponse:
     services.require_group_schedule(request.user)
-    session = get_object_or_404(
-        GroupSession.objects.filter(procedure__in=services.group_schedule_procedures(request.user)),
-        pk=pk,
-    )
-    form = GroupSessionForm(
-        request.POST or None, instance=session, user=request.user, prefix="edit"
-    )
-    if request.method == "POST" and form.is_valid():
+    session = _visible_session(request, pk)
+    group = session.procedure
+    if request.method != "POST":
+        return _group_panel(request, group)
+    form = _session_form(request, session, data=request.POST)
+    if form.is_valid():
         result = _save(form, services.save_group_session, request.user)
         if result is not None:
-            return _sessions_response(request, result=result)
-    return _sessions_response(request, edit_form=form, editing=session)
+            return _group_panel(request, group, result=result)
+    return _group_panel(request, group, bound_session=form)
+
+
+@require_POST
+def session_delete(request: HttpRequest, pk: int) -> HttpResponse:
+    services.require_group_schedule(request.user)
+    session = _visible_session(request, pk)
+    group = session.procedure
+    label = f"{session.start_time:%H:%M}"
+    if not request.POST.get("confirm"):
+        return _group_panel(request, group, confirm=_confirm(group, "session", session))
+    try:
+        removed = services.delete_group_session(request.user, session)
+    except services.ScheduleError as error:
+        return _group_panel(request, group, error=str(error))
+    message = (
+        f"Время {label} в архиве — пациентов в него больше не ставят."
+        if removed.archived
+        else f"Время {label} удалено."
+    )
+    return _group_panel(request, group, message=message, result=removed.rescheduled)
+
+
+@require_POST
+def session_restore(request: HttpRequest, pk: int) -> HttpResponse:
+    services.require_group_schedule(request.user)
+    session = _visible_session(request, pk, active_group=False)
+    group = session.procedure
+    try:
+        result = services.restore_group_session(request.user, session)
+    except services.ScheduleError as error:
+        return _group_panel(request, group, error=str(error))
+    return _group_panel(
+        request, group, message=f"Время {session.start_time:%H:%M} снова действует.", result=result
+    )
+
+
+def _confirm(group: Procedure, kind: str, item: Procedure | GroupSession) -> dict:
+    """Шаг подтверждения «Удалить» в панели: удалится совсем или уйдёт в архив, и сколько
+    текущих программ пересоберётся."""
+    used = services.group_is_used(item) if kind == "group" else services.session_is_used(item)
+    url = "scheduling:group_delete" if kind == "group" else "scheduling:session_delete"
+    return {
+        "kind": kind,
+        "item": item,
+        "used": used,
+        "programs": services.affected_programs(group) if used or kind == "session" else 0,
+        "url": reverse(url, args=[item.pk]),
+    }
+
+
+def _session_form(request: HttpRequest, session: GroupSession, data=None) -> GroupSessionForm:
+    # Префикс общий («edit»): в каждой строке своя форма; id полей — свои, чтобы не совпадали.
+    return GroupSessionForm(
+        data,
+        instance=session,
+        user=request.user,
+        prefix="edit",
+        auto_id=f"id_s{session.pk}_%s",
+    )
+
+
+def _group_panel(
+    request: HttpRequest,
+    group: Procedure | None,
+    *,
+    section: Section | None = None,
+    group_form: GroupForm | None = None,
+    bound_session: GroupSessionForm | None = None,
+    new_session_form: GroupSessionForm | None = None,
+    confirm: dict | None = None,
+    message: str = "",
+    error: str = "",
+    result: services.Rescheduled | None = None,
+) -> HttpResponse:
+    """Панель группы (``group`` и ``group_form`` пусты — панель закрыта) и таблица раздела
+    вне основной цели. ``section`` — вкладка, иначе — раздел группы."""
+    section = section or (group.section if group else None) or _section(None)
+    context: dict[str, Any] = {
+        "section": section,
+        "group": group,
+        "group_form": group_form,
+        "confirm": confirm,
+        "message": message,
+        "error": error,
+        "result": result,
+    }
+    if group is not None:
+        group.refresh_from_db()
+        if group_form is None:
+            group_form = GroupForm(instance=group, user=request.user, prefix="group")
+        sessions = sorted(group.sessions.all(), key=lambda s: (s.start_time, s.pk))
+        context |= {
+            "group_form": group_form,
+            "session_rows": [
+                (
+                    s,
+                    bound_session
+                    if bound_session is not None and bound_session.instance.pk == s.pk
+                    else _session_form(request, s),
+                )
+                for s in sessions
+                if s.is_active
+            ],
+            "archived_sessions": [s for s in sessions if not s.is_active],
+            "new_session_form": new_session_form
+            or GroupSessionForm(
+                user=request.user,
+                initial={"procedure": group, "duration_min": group.default_duration_min or 30},
+            ),
+        }
+    panel = render_to_string("scheduling/_group_panel.html", context, request=request)
+    table = render_to_string(
+        "scheduling/_group_sessions.html",
+        _sessions_context(request, section, selected=group.pk if group else None, oob=True),
+        request=request,
+    )
+    return HttpResponse(panel + table)
+
+
+def equipment_add(request: HttpRequest) -> HttpResponse:
+    services.require_group_schedule(request.user)
+    form = NewEquipmentForm(request.POST or None, prefix="neweq")
+    if request.method == "POST" and form.is_valid():
+        created = _save(
+            form,
+            lambda user, equipment: services.create_equipment(
+                user,
+                equipment,
+                card_label=form.cleaned_data["card_label"],
+                synonyms=form.cleaned_data["synonyms"],
+            ),
+            request.user,
+        )
+        if created is not None:
+            return _equipment_panel(
+                request,
+                created,
+                message=f"Тренажёр «{created.name}» заведён — его можно назначать пациентам.",
+            )
+    return _equipment_panel(request, None, new_form=form)
 
 
 def equipment_edit(request: HttpRequest, pk: int) -> HttpResponse:
@@ -179,8 +508,40 @@ def equipment_edit(request: HttpRequest, pk: int) -> HttpResponse:
     if request.method == "POST" and form.is_valid():
         result = _save(form, services.save_equipment, request.user)
         if result is not None:
-            return _equipment_response(request, result=result)
-    return _equipment_response(request, edit_form=form, editing=equipment)
+            return _equipment_panel(request, equipment, result=result)
+    if request.method == "POST":
+        equipment.refresh_from_db()
+    return _equipment_panel(request, equipment, form=form)
+
+
+def _equipment_panel(
+    request: HttpRequest,
+    equipment: Equipment | None,
+    *,
+    form: EquipmentForm | None = None,
+    new_form: NewEquipmentForm | None = None,
+    message: str = "",
+    result: services.Rescheduled | None = None,
+) -> HttpResponse:
+    if equipment is not None and form is None:
+        form = EquipmentForm(instance=equipment, prefix="eq")
+    panel = render_to_string(
+        "scheduling/_equipment_panel.html",
+        {
+            "equipment": equipment,
+            "form": form,
+            "new_form": new_form,
+            "message": message,
+            "result": result,
+        },
+        request=request,
+    )
+    table = render_to_string(
+        "scheduling/_equipment.html",
+        _equipment_context(selected=equipment.pk if equipment else None, oob=True),
+        request=request,
+    )
+    return HttpResponse(panel + table)
 
 
 def _save(form, action, user):
@@ -196,40 +557,30 @@ def _save(form, action, user):
         return None
 
 
-def _sessions_context(request, *, add_form=None, edit_form=None, editing=None, result=None):
-    if add_form is None:
-        add_form = GroupSessionForm(user=request.user, initial={"duration_min": 30})
-    sessions = services.group_sessions(request.user)
-    # Все времена одной группы — рядом: так видно, где у группы несколько занятий в день.
-    order = {kind: index for index, kind in enumerate(SESSION_KINDS)}
-    sessions.sort(key=lambda s: (order.get(s.procedure.kind, 9), s.procedure.name, s.start_time))
-    active = Counter(s.procedure_id for s in sessions if s.is_active)
-    for session in sessions:
-        session.procedure.active_sessions = active[session.procedure_id]
+def _sessions_context(
+    request, section: Section | None, *, selected: int | None = None, oob: bool = False
+) -> dict:
+    groups = services.section_groups(request.user, section) if section else []
+    active = [group for group in groups if group.is_active]
+    archived_groups = [group for group in groups if not group.is_active]
+    archived_times = [(group, s) for group in active for s in group.archived_sessions]
     return {
-        "sessions": sessions,
-        "add_form": add_form,
-        "edit_form": edit_form,
-        "editing": editing,
-        "sessions_result": result,
+        "section": section,
+        "groups": active,
+        "archived_groups": archived_groups,
+        "archived_times": archived_times,
+        "archived_count": len(archived_groups) + len(archived_times),
+        "selected": selected,
+        "oob": oob,
     }
 
 
-def _equipment_context(*, edit_form=None, editing=None, result=None):
+def _equipment_context(*, selected: int | None = None, oob: bool = False) -> dict:
     return {
-        "equipment_list": Equipment.objects.order_by("name"),
-        "equipment_form": edit_form,
-        "equipment_editing": editing,
-        "equipment_result": result,
+        "equipment_list": Equipment.objects.order_by("-is_active", "name"),
+        "selected": selected,
+        "oob": oob,
     }
-
-
-def _sessions_response(request, **kwargs) -> HttpResponse:
-    return render(request, "scheduling/_group_sessions.html", _sessions_context(request, **kwargs))
-
-
-def _equipment_response(request, **kwargs) -> HttpResponse:
-    return render(request, "scheduling/_equipment.html", _equipment_context(**kwargs))
 
 
 # --- Шахматка на дату (FR-SCH-14…16) ------------------------------------------------------

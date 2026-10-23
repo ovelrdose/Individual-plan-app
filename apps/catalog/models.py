@@ -4,11 +4,12 @@ from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
+from django.db.models.functions import Lower
 from simple_history.models import HistoricalRecords
 
 from apps.org.models import Department
 
-from .domain import add_minutes, equipment_starts
+from .domain import add_minutes, ends_same_day, equipment_starts
 
 
 class Equipment(models.Model):
@@ -81,6 +82,86 @@ SCHEDULED_KINDS = (
 )
 
 
+class SectionBehavior(models.TextChoices):
+    """Как группы раздела ведут себя в расписании — один из видов групп (решение 82).
+    Значения совпадают с ``ProcedureKind``: расписание по-прежнему смотрит на вид процедуры."""
+
+    LFK_GROUP = ProcedureKind.LFK_GROUP.value, "Ведёт инструктор"
+    DS_GROUP = ProcedureKind.DS_GROUP.value, "Без инструктора"
+    POOL = ProcedureKind.POOL.value, "Бассейн"
+
+
+BEHAVIOR_HELP = {
+    SectionBehavior.LFK_GROUP: "Группу может вести инструктор ЛФК — её занятие занимает его "
+    "ячейку в расписании.",
+    SectionBehavior.DS_GROUP: "На расписание инструкторов не влияет; в листе назначений "
+    "распознаётся последней.",
+    SectionBehavior.POOL: "Из таких групп выбирают группу для назначения «Бассейн» без уточнения.",
+}
+
+# Названия разделов, которые заводятся сами, если группы такого вида ещё некуда положить.
+DEFAULT_SECTION_NAMES = {
+    SectionBehavior.LFK_GROUP: "ЛФК",
+    SectionBehavior.DS_GROUP: "ДС",
+    SectionBehavior.POOL: "Бассейн",
+}
+
+
+class Section(models.Model):
+    """Раздел экрана «Групповые занятия» — вкладка с группами одного поведения
+    (TZ.md, FR-CAT-1a, решение 82)."""
+
+    name = models.CharField("название", max_length=60)
+    behavior = models.CharField("поведение", max_length=20, choices=SectionBehavior.choices)
+    order = models.PositiveSmallIntegerField("порядок", default=0)
+
+    history = HistoricalRecords()
+
+    class Meta:
+        verbose_name = "раздел групп"
+        verbose_name_plural = "разделы групп"
+        ordering = ["order", "name"]
+        constraints = [
+            # «ДС» и «дс» — один раздел: вкладки с одинаковыми названиями путали бы.
+            models.UniqueConstraint(
+                Lower("name"),
+                name="unique_section_name_ci",
+                violation_error_message="Раздел с таким названием уже есть.",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+    def clean(self) -> None:
+        if not self.pk:
+            return
+        old = Section.objects.filter(pk=self.pk).values_list("behavior", flat=True).first()
+        if old and old != self.behavior and self.procedures.exists():
+            # Поведение раздела — это вид его групп, а по виду работает расписание (решение 82).
+            raise ValidationError(
+                {"behavior": "В разделе есть группы — поведение раздела не меняется."}
+            )
+
+    @property
+    def behavior_help(self) -> str:
+        return BEHAVIOR_HELP.get(self.behavior, "")
+
+    @classmethod
+    def default_for(cls, kind: str) -> "Section":
+        """Первый раздел с поведением ``kind``; если такого нет — заводится новый в конце."""
+        section = cls.objects.filter(behavior=kind).order_by("order", "pk").first()
+        if section is not None:
+            return section
+        base = DEFAULT_SECTION_NAMES[SectionBehavior(kind)]
+        name, number = base, 1
+        while cls.objects.filter(name__iexact=name).exists():
+            number += 1
+            name = f"{base} {number}"
+        last = cls.objects.aggregate(models.Max("order"))["order__max"]
+        return cls.objects.create(name=name, behavior=kind, order=(last or 0) + 1)
+
+
 class Procedure(models.Model):
     """Процедура из назначения (TZ.md, FR-CAT-1, FR-CAT-2)."""
 
@@ -118,6 +199,17 @@ class Procedure(models.Model):
         verbose_name="отделение",
         help_text="Пусто — процедура общая для всего центра.",
     )
+    # Только группировка на экране «Групповые занятия»: поведение в расписании задаёт ``kind``,
+    # он всегда равен поведению раздела (решение 82).
+    section = models.ForeignKey(
+        Section,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="procedures",
+        verbose_name="раздел",
+        help_text="Вкладка на экране «Групповые занятия». Только у групп.",
+    )
     # Явный признак, а не «бассейн без занятий»: иначе случайно добавленное занятие молча
     # превратило бы «Бассейн» в группу и сломало выбор группы во всех программах.
     group_choice = models.BooleanField(
@@ -134,7 +226,11 @@ class Procedure(models.Model):
         help_text="Проводится на одном из индивидуальных занятий пациента, только с 18:00. "
         "Своего расписания и строки в карте нет.",
     )
-    is_active = models.BooleanField("действует", default=True)
+    is_active = models.BooleanField(
+        "действует",
+        default=True,
+        help_text="Группу выключают на экране «Групповые занятия»: там выключаются и её занятия.",
+    )
 
     history = HistoricalRecords()
 
@@ -143,15 +239,34 @@ class Procedure(models.Model):
         verbose_name_plural = "процедуры"
         ordering = ["kind", "name"]
         constraints = [
+            # Без учёта регистра: «Эрго общая» и «эрго общая» в листе назначений неразличимы.
             models.UniqueConstraint(
-                fields=["name", "department"],
-                name="unique_procedure_per_department",
+                Lower("name"),
+                "department",
+                name="unique_procedure_name_ci_per_department",
                 nulls_distinct=False,
+                violation_error_message="Процедура с таким названием уже есть в этом отделении "
+                "или среди общих.",
             ),
         ]
 
     def __str__(self) -> str:
         return self.name
+
+    def save(self, *args, **kwargs) -> None:
+        # Группа без раздела не видна на экране «Групповые занятия»: заведённая в админке,
+        # командой или тестом, она попадает в первый раздел своего вида (решение 82).
+        if self.section_id is None and self.is_group:
+            self.section = Section.default_for(self.kind)
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = {*update_fields, "section"}
+        super().save(*args, **kwargs)
+
+    @property
+    def is_group(self) -> bool:
+        """Группа с расписанием — у неё есть раздел (решение 82)."""
+        return self.kind in SESSION_KINDS and not self.group_choice
 
     @property
     def is_generic_pool(self) -> bool:
@@ -175,6 +290,17 @@ class Procedure(models.Model):
             raise ValidationError(
                 {"evening_individual": "Вечернее индивидуальное — вид «Только строка в карте»."}
             )
+        if self.section_id is not None:
+            if not self.is_group:
+                raise ValidationError({"section": "Раздел бывает только у групп с расписанием."})
+            if self.kind != self.section.behavior:
+                raise ValidationError(
+                    {
+                        "section": f"В разделе «{self.section}» группы с поведением "
+                        f"«{self.section.get_behavior_display()}» — выберите раздел с тем же "
+                        "поведением."
+                    }
+                )
         if self.group_choice and self.pk and self.sessions.exists():
             raise ValidationError(
                 {"group_choice": "У процедуры есть расписание — это уже группа бассейна."}
@@ -220,6 +346,18 @@ class GroupSession(models.Model):
         if self.procedure_id and self.procedure.group_choice:
             raise ValidationError(
                 {"procedure": "У «Бассейн» без группы нет расписания — выберите группу бассейна."}
+            )
+        if (
+            self.start_time
+            and self.duration_min
+            and not ends_same_day(self.start_time, self.duration_min)
+        ):
+            # Расписание групп — в пределах суток: конец после полуночи не посчитать.
+            raise ValidationError(
+                {
+                    "duration_min": f"Занятие с {self.start_time:%H:%M} на {self.duration_min} мин "
+                    "заканчивается после полуночи — уменьшите длительность или время начала."
+                }
             )
 
     @property

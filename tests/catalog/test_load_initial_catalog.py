@@ -220,3 +220,20 @@ def test_new_sessions_replan_programs(loaded, monkeypatch):
 
     assert calls == [(neuro.pk,)]
     assert starts("Нейро-тренинг") == [time(10, 30), time(14, 20)]
+
+
+def test_groups_get_sections_and_rerun_keeps_them(loaded):
+    """Группы — в разделах своего вида (решение 82); повторная загрузка раздел, выбранный
+    на экране, не трогает."""
+    from apps.catalog.models import Section
+
+    groups = Procedure.objects.filter(kind__in=["LFK_GROUP", "POOL"], group_choice=False)
+    assert all(group.section.behavior == group.kind for group in groups)
+    assert Procedure.objects.get(name="Бассейн").section is None
+    other = Section.objects.create(name="Эрго", behavior="LFK_GROUP", order=9)
+    Procedure.objects.filter(name="Эрго общая").update(section=other)
+
+    load_initial_catalog(LFK, POOL)
+
+    assert Procedure.objects.get(name="Эрго общая").section == other
+    assert Section.objects.count() == 4

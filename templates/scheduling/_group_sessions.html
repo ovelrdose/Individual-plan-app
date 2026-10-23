@@ -1,90 +1,81 @@
-<div id="group-sessions">
-  {% include "scheduling/_rescheduled.html" with result=sessions_result %}
-
-  {% if add_form %}
-    <form class="card mb-3" hx-post="{% url 'scheduling:session_add' %}" hx-target="#group-sessions" hx-swap="outerHTML">
-      <div class="card-body py-3">
-        <h2 class="h6">Добавить занятие группы</h2>
-        <p class="small text-body-secondary mb-2">
-          Новое время группы не сдвигает пациентов: если у группы теперь несколько занятий в день,
-          в их программах появится «выберите время».
-        </p>
-        {% for e in add_form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
-        <div class="row g-2 align-items-start">
-          <div class="col-12 col-md-4">{% include "includes/form_field.html" with field=add_form.procedure wrapper_class="mb-0" %}</div>
-          <div class="col-6 col-md-2">{% include "includes/form_field.html" with field=add_form.start_time wrapper_class="mb-0" %}</div>
-          <div class="col-6 col-md-2">{% include "includes/form_field.html" with field=add_form.duration_min wrapper_class="mb-0" %}</div>
-          <div class="col-12 col-md">{% include "includes/form_field.html" with field=add_form.place wrapper_class="mb-0" %}</div>
-          {# Невидимая подпись выравнивает кнопку по полям, даже если под ними ошибка или подсказка. #}
-          <div class="col-12 col-md-auto">
-            <span class="form-label d-none d-md-block invisible" aria-hidden="true">&nbsp;</span>
-            <button type="submit" class="btn btn-success">Добавить</button>
-          </div>
-        </div>
-      </div>
-    </form>
-  {% endif %}
+{# Таблица раздела — только просмотр: шестерёнка группы открывает окно правки группы и её времён. #}
+{# Архив (удалённые, но использованные группы и времена) — свёрнут внизу (решение 82). #}
+<div id="group-sessions" data-panel-table{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <span class="badge text-bg-light border">{{ section.get_behavior_display }}</span>
+    <span class="small text-body-secondary me-auto">{{ section.behavior_help }}</span>
+    <button type="button" class="btn btn-sm btn-success"
+            hx-get="{% url 'scheduling:group_add' section.pk %}" hx-target="#group-panel" hx-swap="outerHTML">
+      <i class="bi bi-plus-lg"></i> Новая группа
+    </button>
+    <a class="btn btn-sm btn-outline-secondary" href="{% url 'scheduling:section_edit' section.pk %}">
+      <i class="bi bi-pencil"></i> Раздел
+    </a>
+  </div>
 
   <div class="table-responsive">
-    <table class="table table-sm align-middle">
+    <table class="table table-sm table-hover align-middle">
       <thead class="table-light">
         <tr>
           <th style="width: 9rem">Время</th>
-          <th style="width: 6rem">Мин</th>
+          <th style="width: 5rem">Мин</th>
           <th>Место</th>
-          <th style="width: 6rem">Действует</th>
-          <th style="width: 10rem"></th>
+          <th style="width: 4rem"></th>
         </tr>
       </thead>
-      {% regroup sessions by procedure as groups %}
       {% for group in groups %}
         <tbody>
-          <tr>
-            <th colspan="5" class="bg-body-tertiary">
-              {{ group.grouper.name }}
-              {% if group.grouper.kind == "POOL" %}<span class="badge text-bg-info">бассейн</span>{% elif group.grouper.kind == "DS_GROUP" %}<span class="badge text-bg-warning">ДС</span>{% else %}<span class="badge text-bg-light border">ЛФК</span>{% endif %}
-              {% if group.grouper.active_sessions > 1 %}<span class="small fw-normal text-body-secondary ms-1">занятий в день: {{ group.grouper.active_sessions }} — время пациенту выбирают в программе</span>{% endif %}
+          <tr{% if group.pk == selected %} class="table-active"{% endif %}>
+            <th colspan="3" class="bg-body-tertiary">
+              {{ group.name }}
+              {% if group.department %}<span class="badge text-bg-light border">{{ group.department.name }}</span>{% endif %}
+              {% if group.active_sessions > 1 %}<span class="small fw-normal text-body-secondary ms-1">занятий в день: {{ group.active_sessions }} — время пациенту выбирают в программе</span>{% endif %}
+            </th>
+            <th class="bg-body-tertiary text-end">
+              {% include "scheduling/_group_gear.html" %}
             </th>
           </tr>
-          {% for session in group.list %}
-            {% if editing and editing.pk == session.pk %}
-              <tr class="table-warning">
-                <td>
-                  {{ edit_form.start_time }}
-                  {% for e in edit_form.start_time.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
-                  {% for e in edit_form.procedure.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
-                  {% for e in edit_form.non_field_errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
-                </td>
-                <td>{{ edit_form.duration_min }}{% for e in edit_form.duration_min.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</td>
-                <td>{{ edit_form.place }}</td>
-                <td><div class="form-check">{{ edit_form.is_active }}</div></td>
-                <td class="text-end text-nowrap">
-                  <button class="btn btn-sm btn-success"
-                          hx-post="{% url 'scheduling:session_edit' session.pk %}"
-                          hx-include="closest tr" hx-target="#group-sessions" hx-swap="outerHTML">Сохранить</button>
-                  <button class="btn btn-sm btn-link"
-                          hx-get="{% url 'scheduling:group_schedule' %}" hx-select="#group-sessions"
-                          hx-target="#group-sessions" hx-swap="outerHTML">Отмена</button>
-                </td>
-              </tr>
-            {% else %}
-              <tr class="{% if not session.is_active %}text-body-secondary{% endif %}">
-                <td class="fw-semibold">{{ session.start_time|time:"G:i" }}–{{ session.end_time|time:"G:i" }}</td>
-                <td>{{ session.duration_min }}</td>
-                <td>{{ session.place|default:session.procedure.place|default:"—" }}</td>
-                <td>{% if session.is_active %}<i class="bi bi-check-lg text-success" aria-label="да"></i>{% else %}нет{% endif %}</td>
-                <td class="text-end">
-                  <button class="btn btn-sm btn-outline-secondary" title="Изменить"
-                          hx-get="{% url 'scheduling:session_edit' session.pk %}"
-                          hx-target="#group-sessions" hx-swap="outerHTML"><i class="bi bi-pencil"></i></button>
-                </td>
-              </tr>
-            {% endif %}
+          {% for session in group.session_list %}
+            <tr{% if group.pk == selected %} class="table-active"{% endif %}>
+              <td class="fw-semibold">{{ session.start_time|time:"G:i" }}–{{ session.end_time|time:"G:i" }}</td>
+              <td>{{ session.duration_min }}</td>
+              <td>{{ session.place|default:group.place|default:"—" }}</td>
+              <td></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="4" class="small text-body-secondary">Занятий нет.</td></tr>
           {% endfor %}
         </tbody>
       {% empty %}
-        <tbody><tr><td colspan="5" class="text-body-secondary">Занятий групп пока нет.</td></tr></tbody>
+        <tbody><tr><td colspan="4" class="text-body-secondary">Групп в разделе пока нет — заведите кнопкой «Новая группа».</td></tr></tbody>
       {% endfor %}
     </table>
   </div>
+
+  {% if archived_count %}
+    <details class="mt-2">
+      <summary class="text-body-secondary">В архиве ({{ archived_count }})</summary>
+      <p class="small text-body-secondary mt-2 mb-1">
+        Группы и времена, которые уже использовались: пациентов в них не ставят. Вернуть — кнопкой <i class="bi bi-gear"></i>.
+      </p>
+      <table class="table table-sm table-hover align-middle text-body-secondary">
+        <tbody>
+          {% for group in archived_groups %}
+            <tr{% if group.pk == selected %} class="table-active"{% endif %}>
+              <td>{{ group.name }} <span class="badge text-bg-secondary">группа</span></td>
+              <td>{% for session in group.archived_sessions %}{{ session.start_time|time:"G:i" }}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+              <td class="text-end">{% include "scheduling/_group_gear.html" %}</td>
+            </tr>
+          {% endfor %}
+          {% for group, session in archived_times %}
+            <tr{% if group.pk == selected %} class="table-active"{% endif %}>
+              <td>{{ group.name }}</td>
+              <td>{{ session.start_time|time:"G:i" }}–{{ session.end_time|time:"G:i" }}</td>
+              <td class="text-end">{% include "scheduling/_group_gear.html" %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+  {% endif %}
 </div>

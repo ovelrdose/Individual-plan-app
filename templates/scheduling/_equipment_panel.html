@@ -1,0 +1,38 @@
+{# Окно правки тренажёра: окно и вместимость или новый тренажёр. #}
+{% if form or new_form %}
+<div id="equipment-panel" class="side-panel">
+  <div class="card border-0">
+    <div class="card-header d-flex align-items-center gap-2">
+      <strong class="text-truncate">{% if equipment %}{{ equipment.name }}{% else %}Новый тренажёр{% endif %}</strong>
+      <button type="button" class="btn-close ms-auto" data-panel-close aria-label="Закрыть"></button>
+    </div>
+    <div class="card-body">
+      {% if message %}<div class="alert alert-success py-2">{{ message }}</div>{% endif %}
+      {% include "scheduling/_rescheduled.html" with result=result %}
+      {% if new_form %}
+        {% with form=new_form %}
+          <form hx-post="{% url 'scheduling:equipment_add' %}" hx-target="#equipment-panel" hx-swap="outerHTML">
+            {% for e in form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
+            {% include "includes/form_field.html" with field=form.name %}
+            {% include "includes/form_field.html" with field=form.card_label %}
+            {% include "scheduling/_synonyms_field.html" with field=form.synonyms %}
+            {% include "scheduling/_equipment_fields.html" %}
+            <button type="submit" class="btn btn-success">Сохранить</button>
+            <button type="button" class="btn btn-link" data-panel-close>Отмена</button>
+          </form>
+        {% endwith %}
+      {% else %}
+        <form hx-post="{% url 'scheduling:equipment_edit' equipment.pk %}" hx-target="#equipment-panel" hx-swap="outerHTML">
+          {% for e in form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
+          {% include "scheduling/_equipment_fields.html" %}
+          {% include "includes/form_field.html" with field=form.is_active %}
+          <button type="submit" class="btn btn-success">Сохранить</button>
+          <button type="button" class="btn btn-link" data-panel-close>Отмена</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% else %}
+<div id="equipment-panel" class="d-none"></div>
+{% endif %}

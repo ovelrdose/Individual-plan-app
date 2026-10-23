@@ -6,11 +6,14 @@
 """
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date
 
 from django.db import transaction
+from django.db.models import Q
 
 from apps.accounts.models import User
+from apps.catalog.models import GroupSession, InstructorSlot
 from apps.programs.models import Program
 from apps.staff import services as staff_services
 from apps.staff.models import Instructor, InstructorBlock, InstructorDuty
@@ -60,3 +63,76 @@ def after_duty(user: User, duty: InstructorDuty) -> None:
 
 def after_pattern(user: User, instructor: Instructor, valid_from: date) -> None:
     rebuild(instructor, valid_from, None)
+
+
+# --- Группа больше не идёт в слоте инструктора (решение 82) ----------------------------------
+
+
+@dataclass(frozen=True)
+class FreedLead:
+    """Инструктор, у которого закончилось «Ведение группы»: группа или её занятие выключены
+    или занятие ушло из его слота. Слот с завтрашнего дня свободен."""
+
+    instructor: str
+    slot: InstructorSlot
+    group: str
+
+    def __str__(self) -> str:
+        return f"{self.instructor} {self.slot.start:%-H:%M} ({self.group})"
+
+
+def group_lead_instructors(session_ids: list[int]) -> list[int]:
+    """Инструкторы, у которых есть распорядок или разовый блок «Ведение группы» на эти
+    занятия."""
+    ids = set(
+        InstructorDuty.objects.filter(group_session__in=session_ids).values_list(
+            "instructor", flat=True
+        )
+    ) | set(
+        InstructorBlock.objects.filter(group_session__in=session_ids).values_list(
+            "instructor", flat=True
+        )
+    )
+    return sorted(ids)
+
+
+def end_group_leads(user: User, session_ids: list[int], today: date) -> list[FreedLead]:
+    """Ведение выключенных или перенесённых занятий групп заканчивается сегодняшним днём
+    (решение 82): постоянный распорядок — по сегодня (начинавшийся позже — удаляется), разовые
+    блоки на будущие даты удаляются. Прошлое остаётся. Распорядок, который и после переноса
+    пересекается со своим слотом, не трогается.
+
+    Освобождённый слот ничьих занятий не ломает, поэтому шахматки не пересчитываются:
+    пациентов из «Не распределены» специалист ставит в свободный слот сам."""
+    freed: list[FreedLead] = []
+    sessions = GroupSession.objects.select_related("procedure").in_bulk(session_ids)
+    duties = (
+        InstructorDuty.objects.filter(group_session__in=session_ids)
+        .filter(Q(valid_to__isnull=True) | Q(valid_to__gt=today))
+        .select_related("instructor", "slot")
+        .order_by("instructor__display_order", "slot__start", "pk")
+    )
+    for duty in duties:
+        session = sessions[duty.group_session_id]
+        if _still_led(session, duty.slot):
+            continue
+        duty._history_user = user
+        if duty.valid_from > today:
+            duty.delete()
+        else:
+            duty.valid_to = today
+            duty.save(update_fields=["valid_to"])
+        freed.append(FreedLead(duty.instructor.short_name, duty.slot, session.procedure.name))
+    blocks = InstructorBlock.objects.filter(
+        group_session__in=session_ids, date__gt=today
+    ).select_related("instructor", "slot")
+    for block in blocks:
+        if _still_led(sessions[block.group_session_id], block.slot):
+            continue
+        block._history_user = user
+        block.delete()
+    return freed
+
+
+def _still_led(session: GroupSession, slot: InstructorSlot) -> bool:
+    return session.is_active and session.start_time < slot.end and slot.start < session.end_time

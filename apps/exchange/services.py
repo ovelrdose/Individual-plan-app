@@ -211,7 +211,10 @@ def _matched_rows(
     прощается, но врач получает предупреждение в ``warnings``.
     """
     procedures = {p.pk: p for p in visible_procedures(department)}
-    refs = [ProcedureRef(p.pk, p.name, p.kind, tuple(p.synonyms)) for p in procedures.values()]
+    refs = [
+        ProcedureRef(p.pk, p.name, p.kind, tuple(p.synonyms), p.group_choice)
+        for p in procedures.values()
+    ]
     result: list[tuple] = []
     card_only: set[int] = set()
     for row in sheet.rows:

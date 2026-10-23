@@ -81,4 +81,40 @@
   document.addEventListener("keydown", function (event) {
     if (event.key === "Escape" && document.getElementById("prescription-panel")) closePanel();
   });
+
+  // «Групповые занятия»: панель группы или тренажёра приходит в модальное окно #edit-modal.
+  // Пришла панель — окно открывается; панель закрыли (крестик, «Отмена», пустой ответ) —
+  // закрывается. Esc и клик мимо окна закрывают его средствами Bootstrap.
+  function editModal() {
+    const element = document.getElementById("edit-modal");
+    return element && window.bootstrap ? bootstrap.Modal.getOrCreateInstance(element) : null;
+  }
+
+  function closeSidePanels() {
+    document.querySelectorAll(".side-panel").forEach(function (panel) {
+      panel.replaceChildren();
+      panel.className = "d-none";
+    });
+    document
+      .querySelectorAll("[data-panel-table] .table-active")
+      .forEach((row) => row.classList.remove("table-active"));
+  }
+
+  document.addEventListener("htmx:afterSettle", function () {
+    const modal = editModal();
+    if (!modal) return;
+    if (document.querySelector("#edit-modal .side-panel")) modal.show();
+    else modal.hide();
+  });
+
+  document.addEventListener("hidden.bs.modal", function (event) {
+    if (event.target.id === "edit-modal") closeSidePanels();
+  });
+
+  document.addEventListener("click", function (event) {
+    if (!event.target.closest(".side-panel [data-panel-close]")) return;
+    const modal = editModal();
+    if (modal) modal.hide();
+    else closeSidePanels();
+  });
 })();

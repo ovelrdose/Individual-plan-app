@@ -16,7 +16,10 @@ def catalog() -> list[ProcedureRef]:
         data.INDIVIDUAL,
         *data.CARD_ONLY,
     ]
-    refs = [ProcedureRef(i, s.name, s.kind, s.synonyms) for i, s in enumerate(specs, start=1)]
+    refs = [
+        ProcedureRef(i, s.name, s.kind, s.synonyms, s.group_choice)
+        for i, s in enumerate(specs, start=1)
+    ]
     refs += [
         ProcedureRef(100 + i, e.name, ProcedureKind.EQUIPMENT, e.synonyms)
         for i, e in enumerate(data.EQUIPMENT)
