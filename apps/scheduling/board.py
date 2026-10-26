@@ -16,12 +16,14 @@ from datetime import date, time, timedelta
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 
 from apps.accounts.access import departments_for, departments_with, has_right
 from apps.accounts.models import Right, User
 from apps.cards.xlsx.board import BoardCell, BoardSheet
 from apps.catalog.models import Equipment, GroupSession, InstructorSlot, ProcedureKind
+from apps.live import events as live
+from apps.live import topics as live_topics
 from apps.programs.domain import fold, room_sort_key
 from apps.programs.models import Prescription, Program, withdrawn_on
 from apps.staff import domain as staff_domain
@@ -592,6 +594,31 @@ def move_equipment(
     if not board_days.editable(booking.date):
         raise BoardError("Править можно только сегодняшнее и завтрашнее расписание (по будням).")
     return manual.edit_booking(user, booking, version, manual.Target(start=start), reason=reason)
+
+
+@transaction.atomic
+def set_equipment_note(user: User, booking: Booking, version: int, note: str) -> Booking:
+    """Пометка у записи на тренажёр (FR-SCH-10): с этой даты и дальше, как у индивидуальных
+    (там шахматка следующего дня копирует предыдущую). Запись не закрепляется — пересборка
+    тренажёров переносит пометку сама (``services.replan``)."""
+    _require_board(user)
+    if booking.kind != BookingKind.EQUIPMENT:
+        raise BoardError("Это не запись на тренажёр.")
+    program = manual.lock_program(booking.program)
+    _require_patient(user, program)
+    booking = manual.fresh(program, booking, version)
+    # Без ensure_boards — как у move_equipment: порядок блокировок (CLAUDE.md).
+    if not board_days.editable(booking.date):
+        raise BoardError("Править можно только сегодняшнее и завтрашнее расписание (по будням).")
+    booking.note = " ".join(note.split())[:100]
+    booking.version += 1
+    booking._history_user = user
+    booking.save(update_fields=["note", "version"])
+    # Следующие дни — пакетом и без журнала, как автоматические занятия (TZ.md §13, п. 30).
+    later = Booking.objects.filter(prescription=booking.prescription_id, date__gt=booking.date)
+    later.filter(kind=BookingKind.EQUIPMENT).update(note=booking.note, version=F("version") + 1)
+    live.publish(*(live_topics.board(day) for day in board_days.board_dates(board_days.today())))
+    return booking
 
 
 def _require_editable(day: date) -> None:

@@ -718,6 +718,40 @@ def board_equipment_move(request: HttpRequest, pk: int) -> HttpResponse:
     )
 
 
+def _equipment_booking(request: HttpRequest, pk: int) -> Booking:
+    if not board.can_edit_board(request.user):
+        raise PermissionDenied("Нет права править расписание пациентов.")
+    return get_object_or_404(
+        Booking.objects.select_related("program", "equipment"), pk=pk, kind=BookingKind.EQUIPMENT
+    )
+
+
+def board_equipment(request: HttpRequest, pk: int) -> HttpResponse:
+    """Панель записи на тренажёр по клику: пометка (FR-SCH-10)."""
+    booking = _equipment_booking(request, pk)
+    return render(
+        request,
+        "scheduling/_board_equipment.html",
+        {"booking": booking, "version": booking.version, "note_form": True},
+    )
+
+
+@require_POST
+def board_equipment_note(request: HttpRequest, pk: int) -> HttpResponse:
+    booking = _equipment_booking(request, pk)
+    version = _int(request.POST.get("version"))
+    try:
+        board.set_equipment_note(request.user, booking, version, request.POST.get("note", ""))
+    except board.BoardError as error:
+        context = {"booking": booking, "version": version, "note_form": True, "error": str(error)}
+        return render(request, "scheduling/_board_equipment.html", context)
+    return render(
+        request,
+        "scheduling/_board_done.html",
+        {"done": "Пометка сохранена.", "board": board.board(request.user, booking.date)},
+    )
+
+
 @require_POST
 def board_remove(request: HttpRequest, pk: int) -> HttpResponse:
     booking = get_object_or_404(Booking, pk=pk, kind=BookingKind.INDIVIDUAL)

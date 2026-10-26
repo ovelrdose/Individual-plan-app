@@ -1,7 +1,7 @@
-<nav class="navbar navbar-expand bg-body-tertiary border-bottom">
+{% load static %}<nav class="navbar navbar-expand bg-body-tertiary border-bottom">
   <div class="container-fluid px-4">
     <a class="navbar-brand fw-semibold" href="{% url 'home' %}">
-      <i class="bi bi-calendar2-heart text-success"></i> Программа реабилитации
+      <img src="{% static 'img/logo.png' %}" alt="" width="28" height="28" class="align-text-top me-1"> Программа реабилитации
     </a>
 
     {% if current_department %}

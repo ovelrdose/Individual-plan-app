@@ -137,7 +137,10 @@
                       {% if board.can_edit and patient.program_id %}
                         <div class="board-chip" draggable="true" data-drag data-equipment="{{ item.pk }}"
                              data-booking="{{ patient.booking.pk }}" data-version="{{ patient.booking.version }}"
-                             data-busy="{{ patient.busy }}" title="Перетащите на другое время этого тренажёра">{{ patient.label }}</div>
+                             data-busy="{{ patient.busy }}" role="button" tabindex="0"
+                             hx-get="{% url 'scheduling:board_equipment' patient.booking.pk %}"
+                             hx-trigger="click, keyup[key=='Enter']" hx-target="#cell-panel" hx-swap="outerHTML"
+                             title="Перетащите на другое время этого тренажёра, щелчок — пометка">{{ patient.label }}</div>
                       {% else %}
                         <div>{{ patient.label }}</div>
                       {% endif %}

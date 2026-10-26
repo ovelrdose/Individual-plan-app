@@ -316,6 +316,9 @@ def replan(program: Program) -> Proposal:
     # Автоматические занятия пересоздаются целиком и без журнала (TZ.md §13, п. 30):
     # иначе каждая правка назначения писала бы в историю сотни строк.
     automatic = [b for b in bookings if not b.pinned and b.kind in AUTO_KINDS]
+    # Пометки тренажёров переходят на следующие дни, как у индивидуальных (FR-SCH-10):
+    # новая запись берёт пометку ближайшего прошлого дня того же назначения.
+    notes = _equipment_notes(bookings)
     # Где стояли группы до пересборки — чтобы без выбора время не прыгало (решение 81).
     previous: dict[int, Counter[int]] = defaultdict(Counter)
     for booking in automatic:
@@ -360,6 +363,9 @@ def replan(program: Program) -> Proposal:
                 end=_time(placement.end),
                 group_session_id=placement.session_id,
                 equipment_id=placement.equipment_id,
+                note=_note_on(notes, placement.prescription_id, placement.date)
+                if placement.equipment_id
+                else "",
                 source=BookingSource.AUTO,
             )
             for placement in proposal.placements
@@ -377,6 +383,44 @@ def replan(program: Program) -> Proposal:
         *(live_topics.board(day) for day in board_days.board_dates(board_days.today())),
     )
     return proposal
+
+
+def _current_equipment_notes(bookings: list[Booking], today: date) -> dict[int, str]:
+    """Пометка тренажёра по назначению — ближайшего дня с сегодняшнего, как индивидуальные
+    в карте из ближайшей шахматки; курс в прошлом — последнего дня."""
+    chosen: dict[int, Booking] = {}
+    for b in bookings:
+        if b.kind != BookingKind.EQUIPMENT:
+            continue
+        current = chosen.get(b.prescription_id)
+        if current is None or _closer(b.date, current.date, today):
+            chosen[b.prescription_id] = b
+    return {pk: b.note for pk, b in chosen.items()}
+
+
+def _closer(day: date, other: date, today: date) -> bool:
+    if (day >= today) != (other >= today):
+        return day >= today
+    return day < other if day >= today else day > other
+
+
+def _equipment_notes(bookings: list[Booking]) -> dict[int, list[tuple[date, str]]]:
+    """Пометки записей на тренажёр по назначениям: [(дата, пометка)] по датам."""
+    result: dict[int, dict[date, str]] = defaultdict(dict)
+    for booking in sorted(bookings, key=lambda b: (b.date, b.start)):
+        if booking.kind == BookingKind.EQUIPMENT and booking.prescription_id:
+            result[booking.prescription_id][booking.date] = booking.note
+    return {pk: sorted(days.items()) for pk, days in result.items()}
+
+
+def _note_on(notes: dict[int, list[tuple[date, str]]], prescription_id: int, day: date) -> str:
+    """Пометка ближайшего дня не позже ``day``; пустая пометка тоже переходит — её сняли."""
+    note = ""
+    for item_day, item_note in notes.get(prescription_id, ()):
+        if item_day > day:
+            break
+        note = item_note
+    return note
 
 
 def _still_valid(
@@ -1303,10 +1347,13 @@ def program_schedule(program: Program) -> ProgramSchedule:
     today = board_days.today()
     individual = [b for b in bookings if b.kind == BookingKind.INDIVIDUAL]
     nearest = min((b.date for b in individual if b.date >= today), default=None)
+    notes = _current_equipment_notes(bookings, today)
     items = [
         ScheduledItem(
             key=b.prescription_id,
-            label=b.procedure.card_label,
+            # Пометка тренажёра печатается в карте (FR-CRD-2): одна на назначение, иначе
+            # типичный день взял бы подпись случайного дня.
+            label=" ".join(filter(None, (b.procedure.card_label, notes.get(b.prescription_id)))),
             place=b.place,
             date=b.date,
             start=_minutes(b.start),

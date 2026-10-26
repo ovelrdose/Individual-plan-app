@@ -4,7 +4,7 @@
 """
 
 import json
-from datetime import date, time
+from datetime import date, time, timedelta
 
 import pytest
 from django.urls import reverse
@@ -14,8 +14,9 @@ from apps.programs.models import Prescription
 from apps.programs.services import add_prescription
 from apps.scheduling import board, board_days
 from apps.scheduling.models import Booking, BookingKind
+from apps.scheduling.services import replan
 
-MON, TUE = date(2026, 10, 5), date(2026, 10, 6)
+MON, TUE, WED = date(2026, 10, 5), date(2026, 10, 6), date(2026, 10, 7)
 
 
 @pytest.fixture(autouse=True)
@@ -197,3 +198,132 @@ class TestBusyHighlight:
         assert response.status_code == 200
         page = response.content.decode()
         assert "1п" in page and "data-busy=" not in page
+
+
+class TestNote:
+    """Пометка у записи на тренажёр — как у индивидуальных (FR-SCH-10)."""
+
+    def test_note_goes_to_following_days_and_survives_replan(self, two, rehab):
+        first, _second = two
+        booking = equipment_on(first, TUE)
+
+        board.set_equipment_note(rehab, booking, booking.version, "  с  утяжелением ")
+
+        saved = equipment_on(first, TUE)
+        assert (saved.note, saved.pinned, saved.start) == ("с утяжелением", False, booking.start)
+        notes = dict(first.bookings.filter(kind=BookingKind.EQUIPMENT).values_list("date", "note"))
+        # С этой даты и дальше, как у индивидуальных; прошлое не меняется.
+        assert all(note == "" for day, note in notes.items() if day < TUE)
+        assert {day: note for day, note in notes.items() if day >= TUE} == {
+            day: "с утяжелением" for day in notes if day >= TUE
+        }
+        replan(first)
+        assert equipment_on(first, WED).note == "с утяжелением"
+        labels = {p.label for row in board.board(rehab, TUE).equipment_rows
+                  for _i, ps, _o in row.cells for p in ps}  # fmt: skip
+        assert "1п Пациентов1 с утяжелением" in labels
+
+    def test_tomorrow_note_leaves_today(self, two, rehab):
+        booking = equipment_on(two[0], WED)
+        board.set_equipment_note(rehab, booking, booking.version, "art")
+        assert equipment_on(two[0], TUE).note == ""
+        assert equipment_on(two[0], date(2026, 10, 8)).note == "art"
+
+    def test_new_course_day_inherits(self, two, rehab):
+        first = two[0]
+        last = first.end_date
+        booking = equipment_on(first, TUE)
+        board.set_equipment_note(rehab, booking, booking.version, "art")
+        first.end_date = last + timedelta(days=2)
+        first.save(update_fields=["end_date"])
+
+        replan(first)
+
+        added = first.bookings.filter(kind=BookingKind.EQUIPMENT, date__gt=last - timedelta(1))
+        assert added.exists() and set(added.values_list("note", flat=True)) == {"art"}
+
+    def test_capacity_reason_stays_on_its_day(self, two, rehab):
+        first, second = two
+        booking = equipment_on(second, TUE)
+        board.move_equipment(
+            rehab, booking, booking.version, equipment_on(first, TUE).start, "держит 15 мин"
+        )
+        replan(second)
+        assert equipment_on(second, TUE).note == "держит 15 мин"
+        assert equipment_on(second, WED).note == ""
+
+    def test_empty_clears(self, two, rehab):
+        booking = equipment_on(two[0], TUE)
+        board.set_equipment_note(rehab, booking, booking.version, "art")
+        booking = equipment_on(two[0], TUE)
+        board.set_equipment_note(rehab, booking, booking.version, " ")
+        assert equipment_on(two[0], TUE).note == ""
+        assert equipment_on(two[0], WED).note == ""
+
+    def test_rights_version_and_date(
+        self, two, patient, doctor, rehab, make_user, other_department
+    ):
+        booking = equipment_on(two[0], TUE)
+        with pytest.raises(board.BoardError, match="Нет права"):
+            board.set_equipment_note(doctor, booking, booking.version, "x")
+        stranger = make_user("rehab2", (other_department, Preset.REHAB))
+        with pytest.raises(board.BoardError, match="другого отделения"):
+            board.set_equipment_note(stranger, booking, booking.version, "x")
+        with pytest.raises(board.BoardError, match="изменена"):
+            board.set_equipment_note(rehab, booking, booking.version + 1, "x")
+        past = equipment_on(patient("5", start_date=date(2026, 10, 2)), MON)
+        with pytest.raises(board.BoardError, match="сегодняшнее и завтрашнее"):
+            board.set_equipment_note(rehab, past, past.version, "x")
+
+    def test_screen(self, client, two, rehab, doctor):
+        booking = equipment_on(two[0], TUE)
+        client.force_login(rehab)
+        page = client.get(reverse("scheduling:board"), {"date": "2026-10-06"}).content.decode()
+        assert reverse("scheduling:board_equipment", args=[booking.pk]) in page
+
+        panel = client.get(reverse("scheduling:board_equipment", args=[booking.pk]))
+        assert panel.status_code == 200 and 'name="note"' in panel.content.decode()
+
+        url = reverse("scheduling:board_equipment_note", args=[booking.pk])
+        done = client.post(url, {"note": "(шар)", "version": booking.version}).content.decode()
+        assert "Пометка сохранена" in done and 'hx-swap-oob="true"' in done
+        assert "Пациентов1 (шар)" in done
+
+        stale = client.post(url, {"note": "x", "version": booking.version}).content.decode()
+        assert "изменена" in stale and 'name="note"' in stale
+
+        client.force_login(doctor)
+        assert (
+            client.get(reverse("scheduling:board_equipment", args=[booking.pk])).status_code == 403
+        )
+        assert client.post(url, {"note": "x", "version": 0}).status_code == 403
+
+
+class TestNoteInCard:
+    """Пометка тренажёра печатается в блоке «Расписание занятий» карты (FR-CRD-2)."""
+
+    def test_card_has_note_of_nearest_day(self, two, rehab, doctor):
+        from io import BytesIO
+
+        from openpyxl import load_workbook
+
+        from apps.cards.services import build_card_data, export_card
+
+        first = two[0]
+        booking = equipment_on(first, WED)
+        board.set_equipment_note(rehab, booking, booking.version, "(шар)")
+        # Сегодня (вторник) пометки ещё нет — в карту идёт ближайший день, т. е. сегодняшний.
+        assert [i.label for i in build_card_data(first).schedule if "st-150" in i.label] == [
+            "st-150"
+        ]
+        today = equipment_on(first, TUE)
+        board.set_equipment_note(rehab, today, today.version, "(шар)")
+
+        assert [i.label for i in build_card_data(first).schedule if "st-150" in i.label] == [
+            "st-150 (шар)"
+        ]
+        _name, content = export_card(doctor, first)
+        values = [
+            cell.value for row in load_workbook(BytesIO(content)).active.iter_rows() for cell in row
+        ]
+        assert "st-150 (шар)" in values
