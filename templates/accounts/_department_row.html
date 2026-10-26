@@ -1,0 +1,12 @@
+{% with days=department.course_days %}
+<tr{% if department.pk == selected %} class="table-active"{% endif %}>
+  <td class="fw-semibold">{{ department.name }}</td>
+  <td>{{ department.code }}</td>
+  <td>{{ days.3 }} / {{ days.4 }} / {{ days.5 }} / {{ days.УК }}</td>
+  <td>{{ department.max_individual_per_day }}</td>
+  <td class="text-end">
+    <button type="button" class="btn btn-sm btn-outline-secondary" title="Изменить"
+            hx-get="{% url 'users:department_edit' department.pk %}" hx-target="#department-panel" hx-swap="outerHTML"><i class="bi bi-gear"></i></button>
+  </td>
+</tr>
+{% endwith %}

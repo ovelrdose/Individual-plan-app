@@ -500,6 +500,33 @@ class Rescheduled:
     displaced: list[Displaced] = field(default_factory=list)  # индивидуальные — в «Не распределены»
     # «Ведение группы» закончилось — слот инструктора свободен (решение 82)
     freed: list[staff_changes.FreedLead] = field(default_factory=list)
+    # Для экрана (for_viewer): всего пересобрано и сколько программ других отделений скрыто.
+    total: int | None = None
+    hidden: int = 0
+
+
+def for_viewer(result: Rescheduled | None, user: User) -> Rescheduled | None:
+    """Итог для экрана: фамилии — только пациентов отделений пользователя (FR-ACC-2), чужие —
+    числом. Группы и тренажёры общие, пересборка задевает и чужие отделения."""
+    if result is None:
+        return None
+    own = set(departments_for(user).values_list("pk", flat=True))
+
+    def mine(program: Program) -> bool:
+        return program.department_id in own
+
+    every = {p.pk: p for p in result.programs}
+    for item in (*result.reset, *result.unpinned, *result.displaced):
+        every.setdefault(item.program.pk, item.program)
+    return Rescheduled(
+        programs=[p for p in result.programs if mine(p)],
+        reset=[p for p in result.reset if mine(p.program)],
+        unpinned=[b for b in result.unpinned if mine(b.program)],
+        displaced=[d for d in result.displaced if mine(d.program)],
+        freed=result.freed,
+        total=len(result.programs),
+        hidden=sum(1 for p in every.values() if not mine(p)),
+    )
 
 
 def can_edit_group_schedule(user: User) -> bool:
@@ -620,15 +647,47 @@ def stale_pinned(session_ids: list[int]) -> list[Booking]:
 
 
 @transaction.atomic
-def save_equipment(user: User, equipment: Equipment, *, today: date | None = None) -> Rescheduled:
+def save_equipment(
+    user: User,
+    equipment: Equipment,
+    *,
+    today: date | None = None,
+    card_label: str | None = None,
+    synonyms: list[str] | None = None,
+) -> Rescheduled:
     """Окно, шаг, длительность и вместимость тренажёра; расписание программ с ним
-    пересобирается сразу (ручные записи вне окна допустимы и остаются как есть)."""
+    пересобирается сразу (ручные записи вне окна допустимы и остаются как есть).
+
+    ``card_label`` / ``synonyms`` — подпись и синонимы его процедуры (решение 83); название
+    процедуры следует за названием тренажёра, если они совпадали."""
     require_group_schedule(user)
+    equipment.name = equipment.name.strip()
+    if Equipment.objects.filter(name__iexact=equipment.name).exclude(pk=equipment.pk).exists():
+        raise ScheduleError(f"Тренажёр «{equipment.name}» уже есть.")
+    old_name = Equipment.objects.filter(pk=equipment.pk).values_list("name", flat=True).first()
+    procedures = list(equipment.procedures.order_by("pk")) if equipment.pk else []
+    for index, procedure in enumerate(procedures):
+        if procedure.name == old_name:
+            procedure.name = equipment.name
+        if index == 0 and card_label is not None:
+            procedure.card_label = card_label.strip() or equipment.name
+        if index == 0 and synonyms is not None:
+            procedure.synonyms = list(synonyms)
+        if error := procedure_name_taken(procedure):
+            raise ScheduleError(error)
+        procedure.full_clean()
+        procedure._history_user = user
     equipment.full_clean()
     equipment._history_user = user
+
+    def save() -> None:
+        equipment.save()
+        for procedure in procedures:
+            procedure.save()
+
     # Строка тренажёра меняется после блокировки программ: подбор блокирует программу раньше
     # тренажёра, обратный порядок дал бы взаимную блокировку.
-    programs = replan_for_equipment(equipment.pk, today=today, save=equipment.save)
+    programs = replan_for_equipment(equipment.pk, today=today, save=save)
     return Rescheduled(programs)
 
 
@@ -940,6 +999,8 @@ def delete_group(user: User, group: Procedure, *, today: date | None = None) -> 
     # «Совсем» программ не трогает — блокируем строку группы: новое назначение
     # (FOR KEY SHARE) подождёт и не сошлётся на удалённую. Под блокировкой проверяем снова.
     locked = Procedure.objects.select_for_update().get(pk=group.pk)
+    # Её времена — тоже: занятие пациента ссылается и на время, и на группу.
+    list(GroupSession.objects.select_for_update().filter(procedure=locked).order_by("pk"))
     if group_is_used(locked):
         raise ScheduleError("Группу только что начали использовать — обновите страницу.")
     for session in locked.sessions.all():
@@ -956,6 +1017,95 @@ def restore_group(user: User, group: Procedure, *, today: date | None = None) ->
     и возвращаются по одному."""
     group.is_active = True
     return save_group(user, group, today=today)
+
+
+def equipment_is_used(equipment: Equipment) -> bool:
+    """Занятия пациентов на тренажёре или назначения и занятия его процедур (решение 83)."""
+    procedures = equipment.procedures.all()
+    return (
+        Booking.objects.filter(Q(equipment=equipment) | Q(procedure__in=procedures)).exists()
+        or Prescription.objects.filter(procedure__in=procedures).exists()
+    )
+
+
+def equipment_programs(equipment: Equipment, today: date | None = None) -> int:
+    """Сколько текущих программ с этим тренажёром пересоберётся."""
+    return (
+        Program.objects.filter(
+            prescriptions__procedure__equipment=equipment,
+            end_date__gte=today or board_days.today(),
+        )
+        .distinct()
+        .count()
+    )
+
+
+@transaction.atomic
+def delete_equipment(user: User, equipment: Equipment, *, today: date | None = None) -> Removed:
+    """«Удалить» тренажёр на экране «Групповые занятия» (решение 83)."""
+    require_group_schedule(user)
+    return remove_equipment(user, equipment, today=today)
+
+
+@transaction.atomic
+def remove_equipment(user: User, equipment: Equipment, *, today: date | None = None) -> Removed:
+    """Неиспользованный тренажёр — совсем, вместе с процедурой; использованный — в архив
+    вместе с процедурой (её архив в «Справочниках» — это тоже архив тренажёра). Текущие
+    программы пересобираются: занятий на нём больше нет, у назначения — конфликт «тренажёр
+    выключен». Права проверяет вызывающий: «Групповые занятия» или «Справочники»."""
+    if not equipment.is_active:
+        raise ScheduleError("Тренажёр уже в архиве.")
+    if not equipment_is_used(equipment):
+        # Неиспользованный программ не трогает. Сначала процедуры, потом тренажёр: новое
+        # назначение (FOR KEY SHARE на процедуру) ждёт здесь и не успеет дойти до пересборки,
+        # которая блокирует тренажёр, — иначе мы ждали бы друг друга.
+        list(Procedure.objects.select_for_update().filter(equipment=equipment).order_by("pk"))
+        locked = Equipment.objects.select_for_update().get(pk=equipment.pk)
+        if equipment_is_used(locked):
+            raise ScheduleError("Тренажёр только что начали использовать — обновите страницу.")
+        for procedure in locked.procedures.all():
+            procedure._history_user = user
+            procedure.delete()
+        locked._history_user = user
+        locked.delete()
+        return Removed(False)
+    return Removed(True, _set_equipment_active(user, equipment, False, today))
+
+
+@transaction.atomic
+def restore_equipment(
+    user: User, equipment: Equipment, *, today: date | None = None
+) -> Rescheduled:
+    """«Вернуть из архива» тренажёр и его процедуру; программы с ним пересобираются."""
+    require_group_schedule(user)
+    return restore_equipment_now(user, equipment, today=today)
+
+
+@transaction.atomic
+def restore_equipment_now(
+    user: User, equipment: Equipment, *, today: date | None = None
+) -> Rescheduled:
+    """Возврат тренажёра без проверки прав — для «Справочников» (права проверены там)."""
+    return _set_equipment_active(user, equipment, True, today)
+
+
+def _set_equipment_active(
+    user: User, equipment: Equipment, active: bool, today: date | None
+) -> Rescheduled:
+    procedures = list(equipment.procedures.all())
+
+    def save() -> None:
+        equipment.is_active = active
+        equipment._history_user = user
+        equipment.save(update_fields=["is_active"])
+        for procedure in procedures:
+            procedure.is_active = active
+            procedure._history_user = user
+            procedure.save(update_fields=["is_active"])
+
+    with watch_displaced() as displaced:
+        programs = replan_for_equipment(equipment.pk, today=today, save=save)
+    return Rescheduled(programs, displaced=displaced)
 
 
 @transaction.atomic

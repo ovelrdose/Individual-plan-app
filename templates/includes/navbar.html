@@ -23,6 +23,13 @@
             </a>
           </li>
         {% endif %}
+        {% if can_open_catalog %}
+          <li class="nav-item">
+            <a class="nav-link {% if request.resolver_match.app_name == 'catalog' %}active fw-semibold{% endif %}" href="{% url 'catalog:index' %}">
+              <i class="bi bi-book"></i> Справочники
+            </a>
+          </li>
+        {% endif %}
         {% if can_manage_staff %}
           <li class="nav-item dropdown">
             <button type="button" class="nav-link dropdown-toggle {% if request.resolver_match.app_name == 'staff' %}active fw-semibold{% endif %}"
@@ -71,8 +78,9 @@
           {% if can_manage_users %}
             <li><a class="dropdown-item" href="{% url 'users:list' %}"><i class="bi bi-people"></i> Пользователи</a></li>
           {% endif %}
-          {% if user.is_staff %}
-            <li><a class="dropdown-item" hx-boost="false" href="{% url 'admin:index' %}"><i class="bi bi-gear"></i> {% if user_is_admin %}Администрирование{% else %}Справочники{% endif %}</a></li>
+          {% if user.is_superuser %}
+            {# Админка Django — только у суперпользователя (решение 83). #}
+            <li><a class="dropdown-item" hx-boost="false" href="{% url 'admin:index' %}"><i class="bi bi-gear"></i> Администрирование</a></li>
           {% endif %}
           <li><a class="dropdown-item" href="{% url 'password_change' %}"><i class="bi bi-key"></i> Сменить пароль</a></li>
           <li><hr class="dropdown-divider"></li>

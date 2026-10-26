@@ -1,5 +1,7 @@
 from django import forms
+from django.db.models import Q
 
+from apps.catalog.models import Procedure
 from apps.catalog.services import visible_procedures
 from apps.common.forms import BootstrapFormMixin, DateInput
 from apps.org.models import Department
@@ -48,7 +50,14 @@ class _ProcedurePicker:
 
     def _setup_procedure(self) -> None:
         procedure = self.fields["procedure"]
-        procedure.queryset = visible_procedures(self.instance.program.department)
+        choices = visible_procedures(self.instance.program.department)
+        if self.instance.procedure_id:
+            # Процедура в архиве остаётся выбранной у своего назначения: строку можно
+            # сохранить (например, дату отмены), но выбрать архивную заново нельзя (решение 83).
+            choices = Procedure.objects.filter(
+                Q(pk__in=choices.values("pk")) | Q(pk=self.instance.procedure_id)
+            )
+        procedure.queryset = choices
         procedure.required = True
         procedure.widget = forms.HiddenInput()
         procedure.error_messages["required"] = "Выберите процедуру из списка."
@@ -65,6 +74,16 @@ class _ProcedurePicker:
             procedure = getattr(self, "cleaned_data", {}).get("procedure")
             return procedure.name if procedure else ""
         return self.instance.procedure.name if self.instance.procedure else ""
+
+    @property
+    def procedure_archived(self) -> bool:
+        """Подсказка «Процедура в архиве — замените назначение»."""
+        procedure = self.instance.procedure if self.instance.procedure_id else None
+        return (
+            procedure is not None
+            and not procedure.is_active
+            and (self.procedure_id == str(procedure.pk))
+        )
 
     @property
     def procedure_id(self) -> str:

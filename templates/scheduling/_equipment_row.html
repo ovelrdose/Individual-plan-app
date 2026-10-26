@@ -1,0 +1,11 @@
+<tr{% if equipment.pk == selected %} class="table-active"{% endif %}>
+  <td>{{ equipment.name }}</td>
+  <td>{{ equipment.window_start|time:"G:i" }}–{{ equipment.window_end|time:"G:i" }}</td>
+  <td>{{ equipment.step_min }}</td>
+  <td>{{ equipment.duration_min }}</td>
+  <td>{{ equipment.capacity }}</td>
+  <td class="text-end">
+    <button type="button" class="btn btn-sm btn-outline-secondary" title="Изменить"
+            hx-get="{% url 'scheduling:equipment_edit' equipment.pk %}" hx-target="#equipment-panel" hx-swap="outerHTML"><i class="bi bi-gear"></i></button>
+  </td>
+</tr>

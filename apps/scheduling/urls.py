@@ -42,6 +42,8 @@ urlpatterns = [
     path("groups/sessions/<int:pk>/restore/", views.session_restore, name="session_restore"),
     path("groups/equipment/add/", views.equipment_add, name="equipment_add"),
     path("groups/equipment/<int:pk>/edit/", views.equipment_edit, name="equipment_edit"),
+    path("groups/equipment/<int:pk>/delete/", views.equipment_delete, name="equipment_delete"),
+    path("groups/equipment/<int:pk>/restore/", views.equipment_restore, name="equipment_restore"),
     path(
         "program/<int:pk>/pool/<int:prescription_pk>/",
         views.program_pool_group,

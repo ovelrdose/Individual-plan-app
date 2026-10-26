@@ -9,36 +9,21 @@ from apps.catalog.models import Procedure, ProcedureKind
 
 
 class TestStaffFlag:
-    """Вход в админку — по правам «Справочники» и «Пользователи и отделения» (решение 79)."""
+    """Админка Django — только у суперпользователя (решение 83): is_staff = is_superuser."""
 
-    def test_rehab_gets_admin_without_groups(self, rehab):
-        rehab.refresh_from_db()
-
-        assert rehab.is_staff
-        assert not rehab.groups.exists() and not rehab.user_permissions.exists()
-
-    def test_doctor_has_no_admin(self, doctor):
-        doctor.refresh_from_db()
-
-        assert not doctor.is_staff
-
-    @pytest.mark.parametrize(
-        ("rights", "staff"),
-        [([], False), ([Right.SCHEDULE], False), ([Right.CATALOG], True), ([Right.USERS], True)],
-    )
-    def test_follows_rights_on_save(self, rehab, rights, staff):
+    @pytest.mark.parametrize("rights", [[], [Right.CATALOG], [Right.USERS], list(Right)])
+    def test_rights_do_not_give_admin(self, rehab, rights):
         rehab.rights = rights
+        rehab.is_staff = True  # вручную тоже не держится
         rehab.save()
         rehab.refresh_from_db()
 
-        assert rehab.is_staff is staff
+        assert not rehab.is_staff
 
-    def test_manual_flag_is_overwritten(self, doctor):
-        doctor.is_staff = True
-        doctor.save()
-        doctor.refresh_from_db()
+    def test_superuser_stays_staff(self, admin_user):
+        admin_user.save()
 
-        assert not doctor.is_staff
+        assert admin_user.is_staff
 
     def test_superuser_opens_user_in_admin(self, client, admin_user, doctor):
         client.force_login(admin_user)
@@ -46,72 +31,38 @@ class TestStaffFlag:
         url = reverse("admin:accounts_user_change", args=[doctor.pk])
         assert client.get(url).status_code == 200
 
-    def test_superuser_stays_staff(self, admin_user):
-        admin_user.save()
 
-        assert admin_user.is_staff
+class TestAdminOnlySuperuser:
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "admin:index",
+            "admin:catalog_procedure_changelist",
+            "admin:staff_instructor_changelist",
+            "admin:org_department_changelist",
+            "admin:accounts_user_changelist",
+        ],
+    )
+    def test_rehab_and_admin_preset_have_no_admin(self, client, rehab, make_user, department, name):
+        boss = make_user("boss", (department, Preset.ADMIN))
+        for user in (rehab, boss):
+            client.force_login(user)
+            response = client.get(reverse(name))
+            # Не сотрудник админки — на страницу входа админки.
+            assert response.status_code == 302 and "/admin/login/" in response["Location"]
 
-
-class TestRehabInAdmin:
-    def test_sees_catalog_only(self, client, rehab):
+    def test_navbar_admin_link_only_for_superuser(self, client, rehab, admin_user):
         client.force_login(rehab)
-
-        assert client.get(reverse("admin:catalog_procedure_changelist")).status_code == 200
-        assert client.get(reverse("admin:staff_instructor_changelist")).status_code == 200
-        assert client.get(reverse("admin:catalog_instructorslot_changelist")).status_code == 200
-        assert client.get(reverse("admin:org_department_changelist")).status_code == 403
-        assert client.get(reverse("admin:accounts_user_changelist")).status_code == 403
-        url = reverse(
-            "admin:catalog_procedure_delete",
-            args=[
-                Procedure.objects.create(name="X", card_label="X", kind=ProcedureKind.CARD_ONLY).pk
-            ],
-        )
-        assert client.get(url).status_code == 403, "удаление — только у суперпользователя"
-        assert client.post(reverse("admin:catalog_instructorslot_add")).status_code == 403
-
-    def test_users_right_opens_departments(self, client, make_user, department):
-        boss = make_user("boss", (department, Preset.DOCTOR), rights=[Right.USERS])
-        client.force_login(boss)
-
-        assert client.get(reverse("admin:org_department_changelist")).status_code == 200
-        assert client.get(reverse("admin:catalog_procedure_changelist")).status_code == 403
-
-    def test_navbar_link_is_named_catalog(self, client, rehab):
-        client.force_login(rehab)
-
         html = client.get(reverse("home"), follow=True).content.decode()
+        assert "Справочники" in html and "Администрирование" not in html
 
-        assert "Справочники" in html
-
-    def test_procedures_of_other_departments_are_hidden(
-        self, client, rehab, department, other_department
-    ):
-        common = Procedure.objects.create(
-            name="Общая", card_label="Общая", kind=ProcedureKind.CARD_ONLY
-        )
-        own = Procedure.objects.create(
-            name="Своя", card_label="Своя", kind=ProcedureKind.CARD_ONLY, department=department
-        )
-        foreign = Procedure.objects.create(
-            name="Чужая",
-            card_label="Чужая",
-            kind=ProcedureKind.CARD_ONLY,
-            department=other_department,
-        )
-        client.force_login(rehab)
-
-        listed = set(
-            client.get(reverse("admin:catalog_procedure_changelist")).context["cl"].queryset
-        )
-
-        assert listed == {common, own}
-        url = reverse("admin:catalog_procedure_change", args=[foreign.pk])
-        assert client.get(url).status_code == 302  # «объект не найден» → на список
+        client.force_login(admin_user)
+        html = client.get(reverse("home"), follow=True).content.decode()
+        assert "Администрирование" in html
 
     @pytest.mark.parametrize("synonyms", ["ST – 150\nst 150\n\n", "ST – 150\r\nst 150"])
-    def test_create_procedure_with_synonyms(self, client, rehab, synonyms):
-        client.force_login(rehab)
+    def test_superuser_creates_procedure_with_synonyms(self, client, admin_user, synonyms):
+        client.force_login(admin_user)
 
         response = client.post(
             reverse("admin:catalog_procedure_add"),
@@ -128,60 +79,19 @@ class TestRehabInAdmin:
         assert response.status_code == 302, response.context["adminform"].form.errors
         assert Procedure.objects.get(name="Новая").synonyms == ["ST – 150", "st 150"]
 
-
-class TestRehabGroupSessions:
-    @pytest.fixture
-    def groups(self, department, other_department):
-        own = Procedure.objects.create(
-            name="Своя группа",
-            card_label="Своя",
-            kind=ProcedureKind.LFK_GROUP,
-            department=department,
-        )
-        foreign = Procedure.objects.create(
-            name="Чужая группа",
-            card_label="Чужая",
-            kind=ProcedureKind.LFK_GROUP,
+    def test_superuser_sees_group_sessions(self, client, admin_user, other_department):
+        group = Procedure.objects.create(
+            name="Чужая группа", card_label="Чужая", kind=ProcedureKind.LFK_GROUP,
             department=other_department,
-        )
-        card_only = Procedure.objects.create(
-            name="Массаж", card_label="Массаж", kind=ProcedureKind.CARD_ONLY
-        )
-        for group in (own, foreign):
-            group.sessions.create(start_time=time(9, 10))
-        return own, foreign, card_only
+        )  # fmt: skip
+        group.sessions.create(start_time=time(9, 10))
+        client.force_login(admin_user)
 
-    def test_list_and_choices(self, client, rehab, groups):
-        own, _, _ = groups
-        client.force_login(rehab)
+        html = client.get(
+            reverse("admin:catalog_procedure_change", args=[group.pk])
+        ).content.decode()
 
-        listed = client.get(reverse("admin:catalog_groupsession_changelist")).context["cl"].queryset
-        choices = (
-            client.get(reverse("admin:catalog_groupsession_add"))
-            .context["adminform"]
-            .form.fields["procedure"]
-            .queryset
-        )
-
-        assert {s.procedure for s in listed} == {own}
-        assert set(choices) == {own}
-
-    def test_procedure_page_shows_synonyms_and_sessions(self, client, rehab, groups):
-        own, _, card_only = groups
-        own.synonyms = ["Первый", "Второй"]
-        own.save()
-        client.force_login(rehab)
-
-        html = client.get(reverse("admin:catalog_procedure_change", args=[own.pk])).content.decode()
-        form = client.get(reverse("admin:catalog_procedure_add")).context["adminform"].form
-        card_only_page = client.get(reverse("admin:catalog_procedure_change", args=[card_only.pk]))
-
-        assert "Первый\nВторой" in html
         assert "09:10" in html, "у группы показывается её расписание"
-        assert not card_only_page.context["inline_admin_formsets"]
-        assert {d for d in form.fields["department"].queryset} == {
-            rehab.memberships.get().department
-        }
 
 
 class TestDeleteUsers:

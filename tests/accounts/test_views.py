@@ -141,5 +141,5 @@ class TestSeedDev:
         doctor, rehab = User.objects.get(username="doctor"), User.objects.get(username="rehab")
         assert Membership.objects.filter(user__in=[doctor, rehab]).count() == 2
         assert doctor.is_attending_doctor and Right.SCHEDULE not in doctor.rights
-        assert rehab.is_staff and Right.SCHEDULE in rehab.rights
+        assert not rehab.is_staff and Right.SCHEDULE in rehab.rights
         assert User.objects.get(username="doctor").check_password("x-pass-123")

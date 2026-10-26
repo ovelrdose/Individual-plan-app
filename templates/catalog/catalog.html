@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}Справочники{% endblock %}
+
+{% block content %}
+  <h1 class="h3">Справочники</h1>
+  <p class="text-body-secondary">
+    Таблицы — только просмотр; запись меняют кнопкой <i class="bi bi-gear"></i>. Ни разу не
+    использованная запись удаляется совсем, использованная уходит в архив — её можно вернуть.
+    Группы и тренажёры — в <a href="{% url 'scheduling:group_schedule' %}">«Групповых занятиях»</a>.
+  </p>
+
+  <ul class="nav nav-tabs mb-3">
+    {% for name, label in tab_labels %}
+      {% if name in tabs %}
+        <li class="nav-item">
+          <a class="nav-link {% if tab == name %}active{% endif %}" href="{% url 'catalog:index' %}?tab={{ name }}"
+             {% if tab == name %}aria-current="page"{% endif %}>{{ label }}</a>
+        </li>
+      {% endif %}
+    {% endfor %}
+  </ul>
+
+  {% if tab == "procedures" %}
+    {% include "catalog/_procedures.html" %}
+  {% elif tab == "instructors" %}
+    {% include "catalog/_instructors.html" %}
+  {% elif tab == "slots" %}
+    {% include "catalog/_slots.html" %}
+  {% else %}
+    {% include "catalog/_exports.html" %}
+  {% endif %}
+
+  {% if tab == "procedures" or tab == "instructors" %}
+    {# Окно правки, как в «Групповых занятиях» (static/js/prescriptions.js). #}
+    <div class="modal fade" id="edit-modal" tabindex="-1" aria-label="Правка" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+          <div id="{% if tab == 'procedures' %}procedure-panel{% else %}instructor-panel{% endif %}" class="d-none"></div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+{% endblock %}

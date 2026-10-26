@@ -130,7 +130,7 @@ class Command(BaseCommand):
             user.is_superuser = True
         else:
             user.apply_preset(account.preset)
-        # Вход в админку (is_staff) выставляет сигнал по правам.
+        # Вход в админку (is_staff) — только у суперпользователя: его ставит сигнал (решение 83).
         user.save()
         if account.preset is not None:
             Membership.objects.create(user=user, department=department)

@@ -1,0 +1,57 @@
+{# Окно правки отделения (FR-ORG-3, решение 83): поля, «Удалить» / «Вернуть из архива». #}
+{% if form or message or error %}
+<div id="department-panel" class="side-panel">
+  <div class="card border-0">
+    <div class="card-header d-flex align-items-center gap-2">
+      <strong class="text-truncate">{% if department %}{{ department.name }}{% elif form %}Новое отделение{% else %}Отделения{% endif %}</strong>
+      {% if department and not department.is_active %}<span class="badge text-bg-secondary">в архиве</span>{% endif %}
+      <button type="button" class="btn-close ms-auto" data-panel-close aria-label="Закрыть"></button>
+    </div>
+    <div class="card-body">
+      {% if message %}<div class="alert alert-success py-2">{{ message }}</div>{% endif %}
+      {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
+      {% if confirm %}
+        {% url 'users:department_edit' department.pk as cancel_url %}
+        {% include "includes/_confirm_delete.html" with used_text="В отделении уже работали — оно уйдёт в архив: его сотрудники перестанут его видеть, программы сохранятся." unused_text="В отделении ещё нет ни программ, ни сотрудников, ни своих процедур — оно удалится совсем." target="#department-panel" %}
+      {% endif %}
+      {% if form %}
+        <form hx-post="{% if department %}{% url 'users:department_edit' department.pk %}{% else %}{% url 'users:department_add' %}{% endif %}"
+              hx-target="#department-panel" hx-swap="outerHTML">
+          {% for e in form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
+          <div class="row g-2">
+            <div class="col-md-8">{% include "includes/form_field.html" with field=form.name %}</div>
+            <div class="col-md-4">{% include "includes/form_field.html" with field=form.code %}</div>
+          </div>
+          <fieldset class="mb-2">
+            <legend class="form-label fs-6">Длительность курса, календарных дней (считая день поступления)</legend>
+            <div class="row g-2">
+              <div class="col-3">{% include "includes/form_field.html" with field=form.course_3 %}</div>
+              <div class="col-3">{% include "includes/form_field.html" with field=form.course_4 %}</div>
+              <div class="col-3">{% include "includes/form_field.html" with field=form.course_5 %}</div>
+              <div class="col-3">{% include "includes/form_field.html" with field=form.course_uk %}</div>
+            </div>
+            {% for e in form.errors.course_days %}<div class="invalid-feedback d-block">{{ e }}</div>{% endfor %}
+          </fieldset>
+          {% include "includes/form_field.html" with field=form.max_individual_per_day %}
+          <button type="submit" class="btn btn-success">Сохранить</button>
+          <button type="button" class="btn btn-link" data-panel-close>Отмена</button>
+        </form>
+        {% if department %}
+          <hr>
+          <div class="d-flex">
+            {% if department.is_active %}
+              <button type="button" class="btn btn-sm btn-outline-danger ms-auto"
+                      hx-post="{% url 'users:department_delete' department.pk %}" hx-target="#department-panel" hx-swap="outerHTML"><i class="bi bi-trash"></i> Удалить</button>
+            {% else %}
+              <button type="button" class="btn btn-sm btn-outline-primary ms-auto"
+                      hx-post="{% url 'users:department_restore' department.pk %}" hx-target="#department-panel" hx-swap="outerHTML"><i class="bi bi-arrow-counterclockwise"></i> Вернуть из архива</button>
+            {% endif %}
+          </div>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% else %}
+<div id="department-panel" class="d-none"></div>
+{% endif %}

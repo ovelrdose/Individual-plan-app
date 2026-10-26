@@ -790,7 +790,8 @@ class TestPanel:
                 "eq-step_min": "15",
                 "eq-duration_min": "15",
                 "eq-capacity": "3",
-                "eq-is_active": "on",
+                "eq-name": "st-150",
+                "eq-card_label": "st-150",
             },
         )
         assert "Сохранено" in html

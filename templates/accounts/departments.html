@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Отделения{% endblock %}
+
+{% block content %}
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <h1 class="h3 mb-0">Пользователи</h1>
+    <button type="button" class="btn btn-success ms-auto" hx-get="{% url 'users:department_add' %}"
+            hx-target="#department-panel" hx-swap="outerHTML"><i class="bi bi-plus-lg"></i> Новое отделение</button>
+  </div>
+  {% include "accounts/_tabs.html" %}
+  {% include "accounts/_departments.html" %}
+
+  {# Окно правки, как в «Справочниках» (static/js/prescriptions.js). #}
+  <div class="modal fade" id="edit-modal" tabindex="-1" aria-label="Правка" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-content"><div id="department-panel" class="d-none"></div></div>
+    </div>
+  </div>
+{% endblock %}

@@ -179,7 +179,7 @@ class Procedure(models.Model):
     )
     kind = models.CharField("вид", max_length=20, choices=ProcedureKind.choices)
     default_duration_min = models.PositiveSmallIntegerField(
-        "длительность по умолчанию, мин", null=True, blank=True
+        "длительность по умолчанию, мин", null=True, blank=True, validators=[MinValueValidator(1)]
     )
     place = models.CharField("место проведения", max_length=60, blank=True)
     equipment = models.ForeignKey(

@@ -378,15 +378,19 @@ def copy_plan(user: User, program: Program, source: Program) -> None:
     Расписание пересобирает вызывающий."""
     items = source.prescriptions.select_related("procedure", "pool_group", "group_session")
     for item in items.order_by("card_order", "pk"):
+        # Процедуру из архива заново не выбирают (FR-CAT-7): строка приходит нераспознанной,
+        # чтобы врач заменил её сам, а не потерял назначение молча.
+        procedure = item.procedure if item.procedure and item.procedure.is_active else None
+        pool_group = item.pool_group if item.pool_group and item.pool_group.is_active else None
         copy = Prescription(
             program=program,
-            procedure=item.procedure,
-            raw_text=item.raw_text,
+            procedure=procedure,
+            raw_text=item.raw_text or (item.procedure.name if item.procedure else ""),
             duration_min=item.duration_min,
             per_day=item.per_day,
             in_card=item.in_card,
-            pool_group=item.pool_group,
-            group_session=item.group_session if item.session_fits() else None,
+            pool_group=pool_group if procedure else None,
+            group_session=item.group_session if procedure and item.session_fits() else None,
             card_order=item.card_order,
         )
         _save(copy, user)

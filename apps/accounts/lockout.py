@@ -4,7 +4,7 @@
 Записи хранятся в БД, чтобы блокировка работала одинаково во всех процессах gunicorn.
 """
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from django.conf import settings
 from django.utils import timezone
@@ -34,3 +34,16 @@ def register_failure(username: str) -> None:
 
 def reset(username: str) -> None:
     LoginFailure.objects.filter(username=_normalize(username)).delete()
+
+
+def locked_until(username: str) -> datetime | None:
+    """Когда блокировка закончится: самая ранняя из последних N неудач плюс окно; None — вход
+    не заблокирован."""
+    recent = list(
+        LoginFailure.objects.filter(username=_normalize(username), created_at__gte=_window_start())
+        .order_by("-created_at")
+        .values_list("created_at", flat=True)[: settings.LOGIN_LOCKOUT_ATTEMPTS]
+    )
+    if len(recent) < settings.LOGIN_LOCKOUT_ATTEMPTS:
+        return None
+    return recent[-1] + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)

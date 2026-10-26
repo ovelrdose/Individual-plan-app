@@ -1,0 +1,36 @@
+{# Инструкторы — только просмотр (FR-STF-1, решение 83); шестерёнка — окно правки. #}
+<div id="instructors-table" data-panel-table{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <span class="small text-body-secondary me-auto">
+      Смены — на экране <a href="{% url 'staff:shifts' %}">«Смены»</a>, распорядок — <a href="{% url 'staff:duties' %}">«Распорядок»</a>.
+    </span>
+    <button type="button" class="btn btn-success" hx-get="{% url 'catalog:instructor_add' %}"
+            hx-target="#instructor-panel" hx-swap="outerHTML"><i class="bi bi-plus-lg"></i> Новый инструктор</button>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Как в расписании</th>
+          <th>ФИО</th>
+          <th>Напарник 2/2</th>
+          <th title="Порядок колонок в расписании">Порядок</th>
+          <th style="width: 4rem"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for instructor in instructors %}{% include "catalog/_instructor_row.html" %}{% empty %}
+          <tr><td colspan="5" class="text-body-secondary">Инструкторов нет.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if archived %}
+    <details class="mt-2">
+      <summary class="text-body-secondary">В архиве ({{ archived|length }})</summary>
+      <table class="table table-sm align-middle text-body-secondary mt-2">
+        <tbody>{% for instructor in archived %}{% include "catalog/_instructor_row.html" %}{% endfor %}</tbody>
+      </table>
+    </details>
+  {% endif %}
+</div>

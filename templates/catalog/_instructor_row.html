@@ -1,0 +1,10 @@
+<tr{% if instructor.pk == selected %} class="table-active"{% endif %}>
+  <td class="fw-semibold">{{ instructor.short_name }}</td>
+  <td>{{ instructor.full_name }}</td>
+  <td>{{ instructor.partner.short_name|default:"—" }}</td>
+  <td>{{ instructor.display_order }}</td>
+  <td class="text-end">
+    <button type="button" class="btn btn-sm btn-outline-secondary" title="Изменить"
+            hx-get="{% url 'catalog:instructor_edit' instructor.pk %}" hx-target="#instructor-panel" hx-swap="outerHTML"><i class="bi bi-gear"></i></button>
+  </td>
+</tr>

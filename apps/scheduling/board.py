@@ -26,7 +26,7 @@ from apps.programs.domain import fold, room_sort_key
 from apps.programs.models import Prescription, Program, withdrawn_on
 from apps.staff import domain as staff_domain
 from apps.staff.models import BlockKind, Instructor, InstructorBlock, InstructorDuty
-from apps.staff.services import build_teams, instructor_calendars
+from apps.staff.services import build_teams, instructor_calendars, teams_with
 
 from . import board_days, manual, staff_changes
 from .domain import is_weekend
@@ -203,14 +203,14 @@ def board(user: User | None, day: date) -> Board:
     фамилия», без ссылок, блоков и правки."""
     own = set(departments_for(user).values_list("pk", flat=True)) if user else set()
     slots = list(InstructorSlot.objects.order_by("start"))
-    teams = build_teams()
-    instructors = {item.pk: item for item in Instructor.objects.filter(pk__in=_ids(teams))}
-    calendars = instructor_calendars(list(instructors.values()), day, day)
-    bookings = (
+    bookings = list(
         Booking.objects.filter(date=day, kind=BookingKind.INDIVIDUAL)
         .select_related("program__department")
         .order_by("program__room", "pk")
     )
+    teams = teams_with(item.instructor_id for item in bookings)
+    instructors = {item.pk: item for item in Instructor.objects.filter(pk__in=_ids(teams))}
+    calendars = instructor_calendars(list(instructors.values()), day, day)
     by_seat: dict[tuple[int, int], list[Patient]] = defaultdict(list)
     for item in bookings:
         by_seat[(item.instructor_id, item.slot_id)].append(_patient(item.program, own, item))

@@ -12,7 +12,7 @@ from fractions import Fraction
 
 from apps.accounts.models import User
 from apps.staff.models import Instructor
-from apps.staff.services import build_teams, instructor_calendars, require_staff_manager
+from apps.staff.services import instructor_calendars, require_staff_manager, teams_with
 
 from .domain import is_weekend
 from .models import Booking, BookingKind
@@ -44,7 +44,8 @@ def instructor_load(user: User, start: date, end: date) -> LoadReport:
     if end < start:
         start, end = end, start
     end = min(end, start + timedelta(days=MAX_DAYS - 1))
-    teams = build_teams()
+    booked = Booking.objects.filter(kind=BookingKind.INDIVIDUAL, date__range=(start, end))
+    teams = teams_with(booked.values_list("instructor_id", flat=True).distinct())
     ids = [pk for team in teams for pk in team.member_ids]
     instructors = {item.pk: item for item in Instructor.objects.filter(pk__in=ids)}
     calendars = instructor_calendars(list(instructors.values()), start, end)

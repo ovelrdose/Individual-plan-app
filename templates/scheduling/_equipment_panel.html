@@ -1,34 +1,48 @@
-{# Окно правки тренажёра: окно и вместимость или новый тренажёр. #}
-{% if form or new_form %}
+{# Окно правки тренажёра: название, подпись и синонимы, окно и вместимость; удаление и архив. #}
+{% if form or new_form or message %}
 <div id="equipment-panel" class="side-panel">
   <div class="card border-0">
     <div class="card-header d-flex align-items-center gap-2">
-      <strong class="text-truncate">{% if equipment %}{{ equipment.name }}{% else %}Новый тренажёр{% endif %}</strong>
+      <strong class="text-truncate">{% if equipment %}{{ equipment.name }}{% elif new_form %}Новый тренажёр{% else %}Тренажёры{% endif %}</strong>
+      {% if equipment and not equipment.is_active %}<span class="badge text-bg-secondary">в архиве</span>{% endif %}
       <button type="button" class="btn-close ms-auto" data-panel-close aria-label="Закрыть"></button>
     </div>
     <div class="card-body">
       {% if message %}<div class="alert alert-success py-2">{{ message }}</div>{% endif %}
+      {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
       {% include "scheduling/_rescheduled.html" with result=result %}
+      {% if confirm %}
+        {% url 'scheduling:equipment_edit' equipment.pk as cancel_url %}
+        {% include "includes/_confirm_delete.html" with used_text="Тренажёр уже использовался — он уйдёт в архив вместе со своей процедурой: его нельзя будет назначить, занятия на нём у текущих пациентов снимутся." unused_text="Тренажёр ни разу не использовался — он удалится совсем вместе со своей процедурой." target="#equipment-panel" %}
+      {% endif %}
       {% if new_form %}
         {% with form=new_form %}
           <form hx-post="{% url 'scheduling:equipment_add' %}" hx-target="#equipment-panel" hx-swap="outerHTML">
-            {% for e in form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
-            {% include "includes/form_field.html" with field=form.name %}
-            {% include "includes/form_field.html" with field=form.card_label %}
-            {% include "scheduling/_synonyms_field.html" with field=form.synonyms %}
-            {% include "scheduling/_equipment_fields.html" %}
+            {% include "scheduling/_equipment_form_fields.html" %}
             <button type="submit" class="btn btn-success">Сохранить</button>
             <button type="button" class="btn btn-link" data-panel-close>Отмена</button>
           </form>
         {% endwith %}
-      {% else %}
+      {% elif form %}
         <form hx-post="{% url 'scheduling:equipment_edit' equipment.pk %}" hx-target="#equipment-panel" hx-swap="outerHTML">
-          {% for e in form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
-          {% include "scheduling/_equipment_fields.html" %}
-          {% include "includes/form_field.html" with field=form.is_active %}
+          {% include "scheduling/_equipment_form_fields.html" %}
           <button type="submit" class="btn btn-success">Сохранить</button>
           <button type="button" class="btn btn-link" data-panel-close>Отмена</button>
         </form>
+        <hr>
+        <div class="d-flex">
+          {% if equipment.is_active %}
+            <button type="button" class="btn btn-sm btn-outline-danger ms-auto"
+                    hx-post="{% url 'scheduling:equipment_delete' equipment.pk %}" hx-target="#equipment-panel" hx-swap="outerHTML">
+              <i class="bi bi-trash"></i> Удалить тренажёр
+            </button>
+          {% else %}
+            <button type="button" class="btn btn-sm btn-outline-primary ms-auto"
+                    hx-post="{% url 'scheduling:equipment_restore' equipment.pk %}" hx-target="#equipment-panel" hx-swap="outerHTML">
+              <i class="bi bi-arrow-counterclockwise"></i> Вернуть из архива
+            </button>
+          {% endif %}
+        </div>
       {% endif %}
     </div>
   </div>

@@ -1,0 +1,8 @@
+{# Поля тренажёра: название, подпись и синонимы его процедуры, окно и вместимость. #}
+{% for e in form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
+<div class="row g-2">
+  <div class="col-md-6">{% include "includes/form_field.html" with field=form.name %}</div>
+  <div class="col-md-6">{% include "includes/form_field.html" with field=form.card_label %}</div>
+</div>
+{% include "scheduling/_synonyms_field.html" with field=form.synonyms %}
+{% include "scheduling/_equipment_fields.html" %}

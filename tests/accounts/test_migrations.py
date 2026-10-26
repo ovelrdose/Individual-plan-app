@@ -51,3 +51,22 @@ def test_roles_become_rights():
     # Тестовая база остаётся на последней схеме для следующих тестов.
     executor = MigrationExecutor(connection)
     executor.migrate(executor.loader.graph.leaf_nodes())
+
+
+@pytest.mark.django_db
+def test_staff_flag_kept_only_for_superusers(make_user, admin_user):
+    """accounts.0004 (решение 83): админка — только суперпользователю."""
+    from importlib import import_module
+
+    from django.apps import apps
+
+    from apps.accounts.models import User
+
+    migration = import_module("apps.accounts.migrations.0004_staff_only_superusers")
+    rehab = make_user("rehab-old")
+    User.objects.filter(pk=rehab.pk).update(is_staff=True)  # как было до решения 83
+
+    migration.drop_staff(apps, None)
+
+    assert not User.objects.get(pk=rehab.pk).is_staff
+    assert User.objects.get(pk=admin_user.pk).is_staff

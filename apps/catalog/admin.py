@@ -1,12 +1,8 @@
 from django import forms
 from django.contrib import admin
 from django.contrib.postgres.forms import SimpleArrayField
-from django.db.models import Q
 from simple_history.admin import SimpleHistoryAdmin
 
-from apps.accounts.access import departments_for, is_admin
-from apps.accounts.admin_access import RightAdminMixin
-from apps.accounts.models import Right
 from apps.scheduling.services import (
     replan_for_equipment,
     replan_for_group,
@@ -55,19 +51,18 @@ class ProcedureForm(forms.ModelForm):
         ]
 
 
-class GroupSessionInline(RightAdminMixin, admin.TabularInline):
+class GroupSessionInline(admin.TabularInline):
     model = GroupSession
     extra = 0
     fields = ["start_time", "duration_min", "place", "is_active"]
 
 
 @admin.register(Section)
-class SectionAdmin(RightAdminMixin, SimpleHistoryAdmin):
+class SectionAdmin(SimpleHistoryAdmin):
     """Разделы «Групповых занятий» (решение 82); обычно их ведут на самом экране. Сохранение —
     тем же сервисом, что на экране: он блокирует раздел, и смена поведения не разойдётся с
     видом параллельно добавленной группы."""
 
-    right = Right.GROUP_SCHEDULE
     list_display = ["name", "behavior", "order"]
     ordering = ["order", "name"]
 
@@ -76,7 +71,7 @@ class SectionAdmin(RightAdminMixin, SimpleHistoryAdmin):
 
 
 @admin.register(Procedure)
-class ProcedureAdmin(RightAdminMixin, SimpleHistoryAdmin):
+class ProcedureAdmin(SimpleHistoryAdmin):
     form = ProcedureForm
     inlines = [GroupSessionInline]
     list_display = [
@@ -99,20 +94,6 @@ class ProcedureAdmin(RightAdminMixin, SimpleHistoryAdmin):
         if obj is not None and obj.section_id is not None:
             readonly.append("is_active")
         return readonly
-
-    def get_queryset(self, request):
-        # Специалист ФР видит общие процедуры и процедуры своих отделений.
-        queryset = super().get_queryset(request)
-        if is_admin(request.user):
-            return queryset
-        return queryset.filter(
-            Q(department__isnull=True) | Q(department__in=departments_for(request.user))
-        )
-
-    def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        if db_field.name == "department" and not is_admin(request.user):
-            kwargs["queryset"] = departments_for(request.user)
-        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def save_formset(self, request, form, formset, change):
         # Расписание программ следует за расписанием групп (TZ.md, FR-SCH-18). Программы
@@ -140,7 +121,7 @@ class ProcedureAdmin(RightAdminMixin, SimpleHistoryAdmin):
 
 
 @admin.register(GroupSession)
-class GroupSessionAdmin(RightAdminMixin, SimpleHistoryAdmin):
+class GroupSessionAdmin(SimpleHistoryAdmin):
     list_display = ["start_time", "procedure", "duration_min", "place", "is_active"]
     list_filter = ["procedure__kind", "is_active"]
     search_fields = ["procedure__name"]
@@ -178,13 +159,7 @@ class GroupSessionAdmin(RightAdminMixin, SimpleHistoryAdmin):
         replan_for_group(*{item.procedure_id for item in sessions}, save=delete)
 
     def get_queryset(self, request):
-        queryset = super().get_queryset(request).select_related("procedure")
-        if is_admin(request.user):
-            return queryset
-        return queryset.filter(
-            Q(procedure__department__isnull=True)
-            | Q(procedure__department__in=departments_for(request.user))
-        )
+        return super().get_queryset(request).select_related("procedure")
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "procedure":
@@ -197,7 +172,7 @@ class GroupSessionAdmin(RightAdminMixin, SimpleHistoryAdmin):
 
 
 @admin.register(Equipment)
-class EquipmentAdmin(RightAdminMixin, SimpleHistoryAdmin):
+class EquipmentAdmin(SimpleHistoryAdmin):
     list_display = [
         "name",
         "window_start",
@@ -217,8 +192,7 @@ class EquipmentAdmin(RightAdminMixin, SimpleHistoryAdmin):
 
 
 @admin.register(InstructorSlot)
-class InstructorSlotAdmin(RightAdminMixin, SimpleHistoryAdmin):
-    # Сетка слотов задаёт шахматку — её меняет только суперпользователь.
-    read_only = True
+class InstructorSlotAdmin(SimpleHistoryAdmin):
+    # Сетка слотов задаёт шахматку — её меняет только суперпользователь (админка — только ему).
     list_display = ["__str__", "start", "end", "is_evening"]
     list_filter = ["is_evening"]

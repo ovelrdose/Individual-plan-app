@@ -162,7 +162,7 @@ def _page(
             "tab": "equipment" if equipment else "groups",
             "sections": sections,
             "section": section,
-            "equipment_count": Equipment.objects.count(),
+            "equipment_count": Equipment.objects.filter(is_active=True).count(),
         },
         status=status,
     )
@@ -443,7 +443,7 @@ def _group_panel(
         "confirm": confirm,
         "message": message,
         "error": error,
-        "result": result,
+        "result": services.for_viewer(result, request.user),
     }
     if group is not None:
         group.refresh_from_db()
@@ -506,12 +506,60 @@ def equipment_edit(request: HttpRequest, pk: int) -> HttpResponse:
     equipment = get_object_or_404(Equipment, pk=pk)
     form = EquipmentForm(request.POST or None, instance=equipment, prefix="eq")
     if request.method == "POST" and form.is_valid():
-        result = _save(form, services.save_equipment, request.user)
+        result = _save(
+            form,
+            lambda user, item: services.save_equipment(
+                user,
+                item,
+                card_label=form.cleaned_data["card_label"],
+                synonyms=form.cleaned_data["synonyms"],
+            ),
+            request.user,
+        )
         if result is not None:
             return _equipment_panel(request, equipment, result=result)
     if request.method == "POST":
         equipment.refresh_from_db()
     return _equipment_panel(request, equipment, form=form)
+
+
+@require_POST
+def equipment_delete(request: HttpRequest, pk: int) -> HttpResponse:
+    """«Удалить» тренажёр — сначала шаг подтверждения в окне (решение 83)."""
+    services.require_group_schedule(request.user)
+    equipment = get_object_or_404(Equipment, pk=pk)
+    if not request.POST.get("confirm"):
+        confirm = {
+            "used": services.equipment_is_used(equipment),
+            "programs": services.equipment_programs(equipment),
+            "url": reverse("scheduling:equipment_delete", args=[equipment.pk]),
+        }
+        return _equipment_panel(request, equipment, confirm=confirm)
+    try:
+        removed = services.delete_equipment(request.user, equipment)
+    except services.ScheduleError as error:
+        return _equipment_panel(request, equipment, error=str(error))
+    if not removed.archived:
+        return _equipment_panel(request, None, message=f"Тренажёр «{equipment.name}» удалён.")
+    equipment.refresh_from_db()
+    return _equipment_panel(
+        request,
+        equipment,
+        message=f"Тренажёр «{equipment.name}» в архиве: его нельзя назначить, подбор на него "
+        "не ставит.",
+        result=removed.rescheduled,
+    )
+
+
+@require_POST
+def equipment_restore(request: HttpRequest, pk: int) -> HttpResponse:
+    services.require_group_schedule(request.user)
+    equipment = get_object_or_404(Equipment, pk=pk)
+    result = services.restore_equipment(request.user, equipment)
+    equipment.refresh_from_db()
+    return _equipment_panel(
+        request, equipment, message=f"Тренажёр «{equipment.name}» снова действует.", result=result
+    )
 
 
 def _equipment_panel(
@@ -521,6 +569,8 @@ def _equipment_panel(
     form: EquipmentForm | None = None,
     new_form: NewEquipmentForm | None = None,
     message: str = "",
+    error: str = "",
+    confirm: dict | None = None,
     result: services.Rescheduled | None = None,
 ) -> HttpResponse:
     if equipment is not None and form is None:
@@ -532,7 +582,9 @@ def _equipment_panel(
             "form": form,
             "new_form": new_form,
             "message": message,
-            "result": result,
+            "error": error,
+            "confirm": confirm,
+            "result": services.for_viewer(result, request.user),
         },
         request=request,
     )
@@ -576,8 +628,10 @@ def _sessions_context(
 
 
 def _equipment_context(*, selected: int | None = None, oob: bool = False) -> dict:
+    items = list(Equipment.objects.order_by("name"))
     return {
-        "equipment_list": Equipment.objects.order_by("-is_active", "name"),
+        "equipment_list": [item for item in items if item.is_active],
+        "archived": [item for item in items if not item.is_active],
         "selected": selected,
         "oob": oob,
     }

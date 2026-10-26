@@ -31,12 +31,14 @@ class TestCreateUsers:
         assert not admin.memberships.exists() and admin.is_superuser and admin.is_staff
         assert all(u.check_password(PASSWORD) for u in (doctor, rehab, admin))
 
-    def test_admin_access_follows_rights(self):
+    def test_no_admin_access_for_staff(self):
         run("--password", PASSWORD)
 
         rehab = User.objects.get(username="rehab")
         doctor = User.objects.get(username="doctor")
-        assert rehab.is_staff and not rehab.groups.exists()
+        assert (
+            not rehab.is_staff and not rehab.groups.exists()
+        )  # админка — только суперпользователю
         assert not doctor.is_staff
 
     def test_custom_logins_and_names(self):

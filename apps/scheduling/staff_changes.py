@@ -6,8 +6,8 @@
 """
 
 from collections import defaultdict
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, field
+from datetime import date, timedelta
 
 from django.db import transaction
 from django.db.models import Q
@@ -16,7 +16,13 @@ from apps.accounts.models import User
 from apps.catalog.models import GroupSession, InstructorSlot
 from apps.programs.models import Program
 from apps.staff import services as staff_services
-from apps.staff.models import Instructor, InstructorBlock, InstructorDuty
+from apps.staff.models import (
+    Instructor,
+    InstructorBlock,
+    InstructorDuty,
+    ShiftException,
+    ShiftPattern,
+)
 
 from . import board_days
 from .models import Booking, BookingKind
@@ -36,7 +42,16 @@ def rebuild(instructor: Instructor, start: date, end: date | None) -> None:
         by_day[day].add(program_id)
     for day, ids in sorted(by_day.items()):
         with transaction.atomic():
-            board_days.resync(Program.objects.filter(pk__in=ids).select_related("department"), day)
+            # Порядок блокировок общий: программы → тренажёры → инструкторы → шахматки. Без
+            # блокировки программ запись шахматки (FOR KEY SHARE на программу) ждала бы
+            # пересборку, а та — блокировку шахматок, которую держим мы.
+            programs = list(
+                Program.objects.select_for_update(of=("self",))
+                .filter(pk__in=ids)
+                .select_related("department")
+                .order_by("pk")
+            )
+            board_days.resync(programs, day)
 
 
 # --- Точки входа: смена и распорядок изменились ---------------------------------------------
@@ -136,3 +151,110 @@ def end_group_leads(user: User, session_ids: list[int], today: date) -> list[Fre
 
 def _still_led(session: GroupSession, slot: InstructorSlot) -> bool:
     return session.is_active and session.start_time < slot.end and slot.start < session.end_time
+
+
+# --- Инструктор в архиве (TZ.md FR-STF-1, решение 83) ---------------------------------------
+
+
+@dataclass(frozen=True)
+class InstructorRemoved:
+    """Итог «Удалить» инструктора: совсем или в архив и что изменилось."""
+
+    archived: bool
+    partner: str = ""  # пара 2/2 разорвана — напарник остаётся один
+    ended: int = 0  # закончено записей распорядка и шаблонов смены
+    displaced: list = field(default_factory=list)  # пациенты в «Не распределены»
+
+
+def instructor_is_used(instructor: Instructor) -> bool:
+    """Смены, исключения, распорядок, разовые блоки, занятия в шахматке."""
+    return (
+        ShiftPattern.objects.filter(instructor=instructor).exists()
+        or ShiftException.objects.filter(instructor=instructor).exists()
+        or InstructorDuty.objects.filter(instructor=instructor).exists()
+        or InstructorBlock.objects.filter(instructor=instructor).exists()
+        or Booking.objects.filter(instructor=instructor).exists()
+    )
+
+
+def delete_instructor(user: User, instructor: Instructor) -> InstructorRemoved:
+    """«Удалить» инструктора. Ни разу не работавший удаляется совсем. Иначе — в архив: с
+    сегодняшнего дня его нет в сменах и шахматке, шаблон смены и распорядок заканчиваются
+    сегодня, будущие исключения и разовые блоки удаляются, пара 2/2 разрывается; его
+    пациенты в составленных шахматках уходят в «Не распределены» — как после изменения смены.
+
+    Порядок блокировок: сначала транзакция с инструкторами, потом — как у «Смен» — сверка
+    шахматок (программы → шахматки) отдельными транзакциями."""
+    from .services import watch_displaced
+
+    staff_services.require_instructors(user)
+    if not instructor.is_active:
+        raise staff_services.StaffError("Инструктор уже в архиве.")
+    today = board_days.today()
+    removed = _archive_or_delete(user, instructor, today)
+    if not removed.archived:
+        return removed
+    with watch_displaced() as displaced:
+        rebuild(instructor, today, None)
+    return InstructorRemoved(True, removed.partner, removed.ended, displaced)
+
+
+@transaction.atomic
+def _archive_or_delete(user: User, instructor: Instructor, today: date) -> InstructorRemoved:
+    partner = instructor.partner
+    if not instructor_is_used(instructor):
+        staff_services.set_partner(instructor, None, user)
+        locked = Instructor.objects.select_for_update().get(pk=instructor.pk)
+        if instructor_is_used(locked):
+            raise staff_services.StaffError(
+                "Инструктора только что поставили в смену или расписание — обновите страницу."
+            )
+        locked._history_user = user
+        locked.delete()
+        return InstructorRemoved(False, partner.short_name if partner else "")
+    # Пара разрывается тем же сервисом, что на экране: блокировка по pk, журнал.
+    staff_services.set_partner(instructor, None, user)
+    instructor = Instructor.objects.select_for_update().get(pk=instructor.pk)
+    instructor.is_active = False
+    instructor._history_user = user
+    instructor.save(update_fields=["is_active"])
+    ended = 0
+    for model in (ShiftPattern, InstructorDuty):
+        for item in model.objects.filter(instructor=instructor).filter(
+            Q(valid_to__isnull=True) | Q(valid_to__gt=today)
+        ):
+            item._history_user = user
+            if item.valid_from > today:
+                item.delete()
+            else:
+                item.valid_to = today
+                item.save(update_fields=["valid_to"])
+            ended += 1
+    for model in (ShiftException, InstructorBlock):
+        for item in model.objects.filter(instructor=instructor, date__gt=today):
+            item._history_user = user
+            item.delete()
+    return InstructorRemoved(True, partner.short_name if partner else "", ended)
+
+
+@transaction.atomic
+def restore_instructor(user: User, instructor: Instructor) -> Instructor:
+    """«Вернуть из архива»: инструктор снова действует, но без смены — шаблон смены задают
+    на экране «Смены», напарника — в его окне."""
+    staff_services.require_instructors(user)
+    instructor = Instructor.objects.select_for_update().get(pk=instructor.pk)
+    instructor.is_active = True
+    instructor._history_user = user
+    instructor.save(update_fields=["is_active"])
+    # Архив закончил смену и распорядок сегодняшним днём включительно: при возврате в тот же
+    # день они снова действовали бы сегодня, а инструктор возвращается без смены (FR-STF-1).
+    today = board_days.today()
+    for model in (ShiftPattern, InstructorDuty):
+        for item in model.objects.filter(instructor=instructor, valid_to=today):
+            item._history_user = user
+            if item.valid_from >= today:
+                item.delete()
+            else:
+                item.valid_to = today - timedelta(days=1)
+                item.save(update_fields=["valid_to"])
+    return instructor

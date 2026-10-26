@@ -5,6 +5,7 @@
 """
 
 from collections.abc import Iterable
+from datetime import datetime
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
@@ -76,3 +77,21 @@ def set_password(actor: User, user: User, password: str) -> None:
     require_edit_user(actor, user)
     user.set_password(password)
     user.save(update_fields=["password"])
+
+
+# --- Блокировка входа (NFR-6, решение 83) ----------------------------------------------------
+
+
+def locked_until(user: User) -> datetime | None:
+    """До какого времени вход заблокирован после серии неудачных попыток; None — не заблокирован."""
+    from . import lockout
+
+    return lockout.locked_until(user.username)
+
+
+def unlock_user(actor: User, user: User) -> None:
+    """«Снять блокировку»: неудачные попытки входа этого логина забываются."""
+    from . import lockout
+
+    require_edit_user(actor, user)
+    lockout.reset(user.username)

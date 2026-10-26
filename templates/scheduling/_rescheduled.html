@@ -2,11 +2,13 @@
 {% if result %}
   <div class="alert alert-success py-2">
     Сохранено.
-    {% if result.programs %}
-      Расписание пересобрано у программ ({{ result.programs|length }}): {% for program in result.programs %}{{ program.room_label }} {{ program.surname }}{% if program.department_id != current_department.pk %} ({{ program.department.name }}){% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}.
+    {% if result.total %}
+      Расписание пересобрано у программ ({{ result.total }}){% if result.programs %}: {% for program in result.programs %}{{ program.room_label }} {{ program.surname }}{% if program.department_id != current_department.pk %} ({{ program.department.name }}){% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}.
     {% else %}
       Текущих программ с этим занятием нет.
     {% endif %}
+    {# Фамилии — только своих отделений (FR-ACC-2). #}
+    {% if result.hidden %}<div class="small">Затронуто программ других отделений: {{ result.hidden }} — их видят сотрудники этих отделений.</div>{% endif %}
   </div>
   {% if result.reset %}
     <div class="alert alert-warning py-2">

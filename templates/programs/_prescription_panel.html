@@ -38,6 +38,7 @@
           <div id="procedure-results" class="list-group position-absolute w-100 shadow-sm" style="z-index: 10"
                x-show="open && !(id && label)" @click.outside="open = false"></div>
           {% for error in form.procedure.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+          {% if form.procedure_archived %}<div class="form-text text-warning-emphasis"><i class="bi bi-archive"></i> Процедура в архиве — замените назначение.</div>{% endif %}
         </div>
 
         <div class="row g-2 mb-3">

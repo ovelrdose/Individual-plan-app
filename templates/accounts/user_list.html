@@ -7,6 +7,7 @@
     <h1 class="h3 mb-0">Пользователи</h1>
     <a href="{% url 'users:create' %}" class="btn btn-success ms-auto"><i class="bi bi-person-plus"></i> Добавить пользователя</a>
   </div>
+  {% include "accounts/_tabs.html" %}
 
   <table class="table table-hover align-middle">
     <thead class="table-light">
@@ -19,11 +20,12 @@
       </tr>
     </thead>
     <tbody>
-      {% for item, can_edit, rights in users %}
+      {% for item, can_edit, rights, locked in users %}
         <tr{% if not item.is_active %} class="text-body-tertiary"{% endif %}>
           <td>
             {% if can_edit %}<a href="{% url 'users:edit' item.pk %}" class="fw-semibold">{{ item.username }}</a>{% else %}{{ item.username }}{% endif %}
             {% if not item.is_active %}<span class="badge text-bg-secondary">отключён</span>{% endif %}
+            {% if locked %}<span class="badge text-bg-danger" title="Слишком много неудачных попыток входа">вход заблокирован до {{ locked|date:"H:i" }}</span>{% endif %}
           </td>
           <td>
             {{ item.get_full_name|default:item.short_name }}
@@ -39,6 +41,12 @@
           </td>
           <td class="text-end text-nowrap">
             {% if can_edit %}
+              {% if locked %}
+                <form method="post" action="{% url 'users:unlock' item.pk %}" class="d-inline">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-unlock"></i> Снять блокировку</button>
+                </form>
+              {% endif %}
               <a href="{% url 'users:password' item.pk %}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-key"></i> Пароль</a>
             {% endif %}
           </td>

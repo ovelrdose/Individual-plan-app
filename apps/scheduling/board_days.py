@@ -95,6 +95,15 @@ def drop_beyond_boards() -> int:
 def create_board(day: date) -> bool:
     """Шахматка на дату из предыдущей составленной (FR-SCH-6); первой нет — все пациенты
     раскладываются как новые (FR-SCH-13). Уже составлена — ничего не делает."""
+    if BoardDay.objects.filter(date=day).exists():
+        return False
+    # Программы дня блокируем раньше шахматок (общий порядок): запись занятий ссылается на
+    # программу, а пересборка программы ждёт блокировку шахматок.
+    list(
+        Program.objects.select_for_update(of=("self",))
+        .filter(pk__in=[program.pk for program in _programs_on(day)])
+        .order_by("pk")
+    )
     lock()
     if BoardDay.objects.filter(date=day).exists():
         return False

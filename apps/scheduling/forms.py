@@ -6,7 +6,7 @@ from django.core.validators import MinValueValidator
 from apps.accounts.models import User
 from apps.catalog.domain import ends_same_day
 from apps.catalog.models import BEHAVIOR_HELP, Equipment, GroupSession, Procedure, Section
-from apps.common.forms import BootstrapFormMixin
+from apps.common.forms import BootstrapFormMixin, ListInput, StringListField
 
 from .services import group_departments, group_schedule_procedures, procedure_name_taken
 
@@ -16,41 +16,6 @@ class TimeInput(forms.TimeInput):
 
     def __init__(self, attrs=None):
         super().__init__(attrs=attrs, format="%H:%M")
-
-
-class ListInput(forms.Widget):
-    """Несколько полей с одним именем (синонимы, времена): поля рисует шаблон, новые
-    добавляет Alpine.js по кнопке «добавить»."""
-
-    def value_from_datadict(self, data, files, name: str) -> list[str]:
-        if hasattr(data, "getlist"):
-            return data.getlist(name)
-        return list(data.get(name) or [])
-
-
-class StringListField(forms.Field):
-    """Список строк без пустых и повторов (синонимы процедуры)."""
-
-    widget = ListInput
-
-    def __init__(self, *, max_length: int = 100, **kwargs) -> None:
-        self.max_length = max_length
-        super().__init__(**kwargs)
-
-    def to_python(self, value) -> list[str]:
-        result: list[str] = []
-        for item in value or []:
-            text = str(item).strip()
-            if not text or text in result:
-                continue
-            if len(text) > self.max_length:
-                raise forms.ValidationError(f"«{text[:30]}…» длиннее {self.max_length} символов.")
-            result.append(text)
-        return result
-
-    def validate(self, value: list[str]) -> None:
-        if self.required and not value:
-            raise forms.ValidationError(self.error_messages["required"], code="required")
 
 
 class TimeListField(forms.Field):
@@ -108,13 +73,6 @@ class GroupSessionForm(BootstrapFormMixin, forms.ModelForm):
             self.fields["procedure"].disabled = True
 
 
-class EquipmentForm(BootstrapFormMixin, forms.ModelForm):
-    class Meta:
-        model = Equipment
-        fields = ["window_start", "window_end", "step_min", "duration_min", "capacity", "is_active"]
-        widgets = {"window_start": TimeInput(), "window_end": TimeInput()}
-
-
 class NewEquipmentForm(BootstrapFormMixin, forms.ModelForm):
     """Новый тренажёр вместе с его процедурой (services.create_equipment)."""
 
@@ -132,6 +90,18 @@ class NewEquipmentForm(BootstrapFormMixin, forms.ModelForm):
         model = Equipment
         fields = ["name", "window_start", "window_end", "step_min", "duration_min", "capacity"]
         widgets = {"window_start": TimeInput(), "window_end": TimeInput()}
+
+
+class EquipmentForm(NewEquipmentForm):
+    """Правка тренажёра: название, подпись и синонимы его процедуры, окно и вместимость.
+    «Действует» нет — «Удалить» / «Вернуть из архива» (решение 83)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        procedure = self.instance.procedures.order_by("pk").first() if self.instance.pk else None
+        if procedure is not None and not self.is_bound:
+            self.initial["card_label"] = procedure.card_label
+            self.initial["synonyms"] = list(procedure.synonyms)
 
 
 class SectionForm(BootstrapFormMixin, forms.ModelForm):

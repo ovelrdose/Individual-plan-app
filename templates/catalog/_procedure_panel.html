@@ -1,0 +1,76 @@
+{# Окно правки процедуры (FR-CAT-7, решение 83): поля, «Удалить» / «Вернуть из архива». #}
+{% if form or message or error or procedure %}
+<div id="procedure-panel" class="side-panel">
+  <div class="card border-0">
+    <div class="card-header d-flex align-items-center gap-2">
+      <strong class="text-truncate">{% if procedure %}{{ procedure.name }}{% elif form %}Новая процедура{% else %}Процедуры{% endif %}</strong>
+      {% if procedure and not procedure.is_active %}<span class="badge text-bg-secondary">в архиве</span>{% endif %}
+      <button type="button" class="btn-close ms-auto" data-panel-close aria-label="Закрыть"></button>
+    </div>
+    <div class="card-body">
+      {% if message %}<div class="alert alert-success py-2">{{ message }}</div>{% endif %}
+      {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
+      {% include "scheduling/_rescheduled.html" with result=result %}
+      {% if procedure.is_group %}
+        <p>Это группа — её правят, убирают в архив и возвращают в
+          <a href="{% url 'scheduling:group_schedule' %}?section={{ procedure.section_id }}">«Групповых занятиях»</a>:
+          там видно её времена и у кого изменится расписание.</p>
+      {% elif readonly %}
+        <p class="text-body-secondary">Отделение «{{ procedure.department.name }}» в архиве — его процедуры только для просмотра.</p>
+      {% endif %}
+      {% if confirm %}
+        {% url 'catalog:procedure_edit' procedure.pk as cancel_url %}
+        {% if procedure.kind == "EQUIPMENT" %}
+          {% include "includes/_confirm_delete.html" with used_text="Тренажёр уже использовался — процедура уйдёт в архив вместе с тренажёром: его нельзя будет назначить, занятия на нём у текущих пациентов снимутся." unused_text="Тренажёр ни разу не использовался — процедура удалится совсем вместе с тренажёром." target="#procedure-panel" include="#procedure-filter" %}
+        {% else %}
+          {% include "includes/_confirm_delete.html" with used_text="Процедуру уже назначали — она уйдёт в архив: её не будет в поиске и в распознавании листа назначений." unused_text="Процедуру ни разу не назначали — она удалится совсем." target="#procedure-panel" include="#procedure-filter" %}
+        {% endif %}
+      {% endif %}
+      {% if form %}
+        <form hx-post="{% if procedure %}{% url 'catalog:procedure_edit' procedure.pk %}{% else %}{% url 'catalog:procedure_add' %}{% endif %}"
+              hx-include="#procedure-filter" hx-target="#procedure-panel" hx-swap="outerHTML">
+          {% for e in form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
+          <div class="row g-2">
+            <div class="col-md-6">{% include "includes/form_field.html" with field=form.name %}</div>
+            <div class="col-md-6">{% include "includes/form_field.html" with field=form.card_label %}</div>
+          </div>
+          {% include "scheduling/_synonyms_field.html" with field=form.synonyms %}
+          <div class="row g-2">
+            <div class="col-md-6">{% include "includes/form_field.html" with field=form.kind %}</div>
+            <div class="col-md-6">{% include "includes/form_field.html" with field=form.department %}</div>
+            <div class="col-4 col-md-3">{% include "includes/form_field.html" with field=form.default_duration_min %}</div>
+            <div class="col-8 col-md-9">{% include "includes/form_field.html" with field=form.place %}</div>
+          </div>
+          {% if procedure.kind == "EQUIPMENT" %}
+            <p class="small text-body-secondary">
+              Окно, шаг, длительность и вместимость тренажёра — в
+              <a href="{% url 'scheduling:group_schedule' %}?tab=equipment">«Групповых занятиях»</a>.
+            </p>
+          {% else %}
+            {% include "includes/form_field.html" with field=form.group_choice %}
+            {% include "includes/form_field.html" with field=form.evening_individual %}
+          {% endif %}
+          <button type="submit" class="btn btn-success">Сохранить</button>
+          <button type="button" class="btn btn-link" data-panel-close>Отмена</button>
+        </form>
+        {% if procedure %}
+          <hr>
+          <div class="d-flex">
+            {% if procedure.is_active %}
+              <button type="button" class="btn btn-sm btn-outline-danger ms-auto"
+                      hx-post="{% url 'catalog:procedure_delete' procedure.pk %}" hx-include="#procedure-filter"
+                      hx-target="#procedure-panel" hx-swap="outerHTML"><i class="bi bi-trash"></i> Удалить</button>
+            {% else %}
+              <button type="button" class="btn btn-sm btn-outline-primary ms-auto"
+                      hx-post="{% url 'catalog:procedure_restore' procedure.pk %}" hx-include="#procedure-filter"
+                      hx-target="#procedure-panel" hx-swap="outerHTML"><i class="bi bi-arrow-counterclockwise"></i> Вернуть из архива</button>
+            {% endif %}
+          </div>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% else %}
+<div id="procedure-panel" class="d-none"></div>
+{% endif %}

@@ -38,7 +38,9 @@ class StaffError(Exception):
 
 
 @transaction.atomic
-def set_partner(instructor: Instructor, partner: Instructor | None) -> None:
+def set_partner(
+    instructor: Instructor, partner: Instructor | None, user: User | None = None
+) -> None:
     """Связь напарников симметрична (FR-STF-1): A↔B. Прежние пары обоих разрываются.
 
     Сохраняем через save(), а не update(), чтобы каждое изменение попало в журнал (NFR-5).
@@ -46,14 +48,20 @@ def set_partner(instructor: Instructor, partner: Instructor | None) -> None:
     if partner is not None and partner.pk == instructor.pk:
         raise ValueError("Инструктор не может быть напарником сам себе.")
     pks = {instructor.pk} | ({partner.pk} if partner is not None else set())
-    _link(_lock_pair(pks), instructor, partner)
+    _link(_lock_pair(pks), instructor, partner, user)
     instructor.refresh_from_db(fields=["partner"])
     if partner is not None:
         partner.refresh_from_db(fields=["partner"])
 
 
 @transaction.atomic
-def save_instructor(instructor: Instructor, partner: Instructor | None, *, relink: bool) -> None:
+def save_instructor(
+    instructor: Instructor,
+    partner: Instructor | None,
+    *,
+    relink: bool,
+    user: User | None = None,
+) -> None:
     """Сохранить инструктора из админки (в том числе порядок в списке): участники пары
     блокируются одним запросом до первого изменения — тот же порядок «по pk», что у подбора
     расписания, иначе правка пары и подбор могли бы ждать друг друга.
@@ -65,10 +73,12 @@ def save_instructor(instructor: Instructor, partner: Instructor | None, *, relin
     locked = _lock_pair(pks) if pks else {}
     # Пару меняет только _link: здесь — прежнее значение из базы (или пусто для нового).
     instructor.partner_id = locked[instructor.pk].partner_id if instructor.pk in locked else None
+    if user is not None:
+        instructor._history_user = user
     instructor.save()
     if relink:
         locked[instructor.pk] = instructor
-        _link(locked, instructor, partner)
+        _link(locked, instructor, partner, user)
 
 
 def _lock_pair(pks: set[int]) -> dict[int, Instructor]:
@@ -92,7 +102,10 @@ def _lock_pair(pks: set[int]) -> dict[int, Instructor]:
 
 
 def _link(
-    locked: dict[int, Instructor], instructor: Instructor, partner: Instructor | None
+    locked: dict[int, Instructor],
+    instructor: Instructor,
+    partner: Instructor | None,
+    user: User | None = None,
 ) -> None:
     target = {instructor.pk: partner.pk} if partner is not None else {}
     if partner is not None:
@@ -101,12 +114,60 @@ def _link(
     for item in locked.values():
         if item.partner_id is not None and item.partner_id != target.get(item.pk):
             item.partner = None
+            if user is not None:
+                item._history_user = user
             item.save(update_fields=["partner"])
     for pk, partner_pk in target.items():
         item = locked[pk]
         if item.partner_id != partner_pk:
             item.partner_id = partner_pk
+            if user is not None:
+                item._history_user = user
             item.save(update_fields=["partner"])
+
+
+# --- Справочник инструкторов (экран «Справочники», TZ.md FR-STF-1, решение 83) ---------------
+
+
+def can_edit_instructors(user: User) -> bool:
+    """Справочник инструкторов — право «Справочники» (решение 83)."""
+    return has_right(user, Right.CATALOG)
+
+
+def require_instructors(user: User) -> None:
+    if not can_edit_instructors(user):
+        raise PermissionDenied("Нет права править справочник инструкторов.")
+
+
+@transaction.atomic
+def save_instructor_card(
+    user: User, instructor: Instructor, partner: Instructor | None
+) -> Instructor:
+    """Новый инструктор или правка: фамилия «как в расписании», ФИО, напарник 2/2, порядок.
+    Пару ставит ``set_partner`` — симметрично и с блокировкой по pk."""
+    require_instructors(user)
+    if partner is not None and (partner.pk == instructor.pk or not partner.is_active):
+        raise StaffError("Напарник — другой действующий инструктор.")
+    if instructor.pk and not instructor.is_active and partner is not None:
+        raise StaffError("Инструктору в архиве напарника не назначают — сначала верните его.")
+    instructor.short_name = instructor.short_name.strip()
+    instructor.full_name = instructor.full_name.strip()
+    same = Instructor.objects.filter(short_name__iexact=instructor.short_name)
+    if same.exclude(pk=instructor.pk).exists():
+        raise StaffError(f"Инструктор «{instructor.short_name}» уже есть.")
+    old_partner = (
+        Instructor.objects.filter(pk=instructor.pk).values_list("partner_id", flat=True).first()
+        if instructor.pk
+        else None
+    )
+    instructor.full_clean(exclude=["partner"])
+    save_instructor(
+        instructor,
+        partner,
+        relink=(partner.pk if partner else None) != old_partner,
+        user=user,
+    )
+    return instructor
 
 
 # --- Права ----------------------------------------------------------------------------------
@@ -187,6 +248,13 @@ def instructor_calendars(
         )
         for pk in ids
     }
+
+
+def teams_with(archived_ids: Iterable[int]) -> list[domain.Team]:
+    """Команды действующих и тех архивных из ``archived_ids``, у кого есть занятия за период:
+    прошлое после архива не пропадает с шахматки и из отчёта (решение 83)."""
+    extra = Instructor.objects.filter(pk__in=set(archived_ids), is_active=False)
+    return build_teams(active_instructors() + list(extra.order_by("display_order", "pk")))
 
 
 def build_teams(instructors: Iterable[Instructor] | None = None) -> list[domain.Team]:

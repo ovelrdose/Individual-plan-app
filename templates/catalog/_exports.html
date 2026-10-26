@@ -1,0 +1,31 @@
+{# Журнал выгрузок карт (FR-CRD-5): кто и когда выгрузил карту; право «Пользователи». #}
+<form class="row g-2 align-items-end mb-3" method="get" action="{% url 'catalog:index' %}">
+  <input type="hidden" name="tab" value="exports">
+  <div class="col-auto">
+    <label class="form-label" for="export-date">Дата</label>
+    <input type="date" id="export-date" name="date" value="{{ export_date|date:'Y-m-d' }}" class="form-control">
+  </div>
+  <div class="col-12 col-md-4">
+    <label class="form-label" for="export-q">Пациент</label>
+    <input type="search" id="export-q" name="q" value="{{ query }}" class="form-control" placeholder="Фамилия">
+  </div>
+  <div class="col-auto"><button type="submit" class="btn btn-outline-secondary">Найти</button></div>
+</form>
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead class="table-light"><tr><th>Когда</th><th>Пациент</th><th>Отделение</th><th>Кто выгрузил</th></tr></thead>
+    <tbody>
+      {% for item in exports %}
+        <tr>
+          <td class="text-nowrap">{{ item.created_at|date:"d.m.Y H:i" }}</td>
+          <td>{% if item.program.department.is_active %}<a href="{% url 'programs:detail' item.program_id %}">{{ item.program.full_name }}</a>{% else %}{{ item.program.full_name }}{% endif %}</td>
+          <td>{{ item.program.department.name }}</td>
+          <td>{{ item.user|default:"—" }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="4" class="text-body-secondary">Выгрузок нет.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="small text-body-secondary">Показаны последние 300 выгрузок по условию.</p>

@@ -1,0 +1,62 @@
+{# Окно правки инструктора (FR-STF-1, решение 83): поля, «Удалить» (архив) / «Вернуть». #}
+{% if form or message or error or removed %}
+<div id="instructor-panel" class="side-panel">
+  <div class="card border-0">
+    <div class="card-header d-flex align-items-center gap-2">
+      <strong class="text-truncate">{% if instructor %}{{ instructor.short_name }}{% elif form %}Новый инструктор{% else %}Инструкторы{% endif %}</strong>
+      {% if instructor and not instructor.is_active %}<span class="badge text-bg-secondary">в архиве</span>{% endif %}
+      <button type="button" class="btn-close ms-auto" data-panel-close aria-label="Закрыть"></button>
+    </div>
+    <div class="card-body">
+      {% if message %}<div class="alert alert-success py-2">{{ message }}</div>{% endif %}
+      {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
+      {% if removed %}
+        <div class="alert alert-success py-2">
+          «{{ instructor.short_name }}» в архиве: с сегодняшнего дня его нет в сменах и расписании.
+          {% if removed.ended %}Шаблон смены и распорядок закончены сегодня ({{ removed.ended }}).{% endif %}
+          {% if removed.partner %}Пара 2/2 разорвана — {{ removed.partner }} теперь работает один.{% endif %}
+        </div>
+        {% if displaced or hidden %}
+          <div class="alert alert-warning py-2">
+            Пациенты в «Не распределены» — переставьте их в расписании{% if displaced %}:
+            {% for item in displaced %}{{ item.date|date:"d.m" }} {{ item.program.room_label }} {{ item.program.surname }} ({{ item.start|time:"G:i" }}){% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}.
+            {% if hidden %}<div class="small">И пациентов других отделений: {{ hidden }} — их переставят сотрудники этих отделений.</div>{% endif %}
+          </div>
+        {% endif %}
+      {% endif %}
+      {% if confirm %}
+        {% url 'catalog:instructor_edit' instructor.pk as cancel_url %}
+        {% include "includes/_confirm_delete.html" with used_text="Инструктор уже работал — он уйдёт в архив: с сегодняшнего дня его нет в сменах и расписании, его пациенты на сегодня и завтра уйдут в «Не распределены», шаблон смены, распорядок и «Ведение группы» закончатся сегодня." unused_text="Инструктор ни разу не стоял в сменах и расписании — он удалится совсем." target="#instructor-panel" %}
+      {% endif %}
+      {% if form %}
+        <form hx-post="{% if instructor %}{% url 'catalog:instructor_edit' instructor.pk %}{% else %}{% url 'catalog:instructor_add' %}{% endif %}"
+              hx-target="#instructor-panel" hx-swap="outerHTML">
+          {% for e in form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
+          <div class="row g-2">
+            <div class="col-md-5">{% include "includes/form_field.html" with field=form.short_name %}</div>
+            <div class="col-md-7">{% include "includes/form_field.html" with field=form.full_name %}</div>
+            <div class="col-md-8">{% include "includes/form_field.html" with field=form.partner %}</div>
+            <div class="col-md-4">{% include "includes/form_field.html" with field=form.display_order %}</div>
+          </div>
+          <button type="submit" class="btn btn-success">Сохранить</button>
+          <button type="button" class="btn btn-link" data-panel-close>Отмена</button>
+        </form>
+        {% if instructor %}
+          <hr>
+          <div class="d-flex">
+            {% if instructor.is_active %}
+              <button type="button" class="btn btn-sm btn-outline-danger ms-auto"
+                      hx-post="{% url 'catalog:instructor_delete' instructor.pk %}" hx-target="#instructor-panel" hx-swap="outerHTML"><i class="bi bi-trash"></i> Удалить</button>
+            {% else %}
+              <button type="button" class="btn btn-sm btn-outline-primary ms-auto"
+                      hx-post="{% url 'catalog:instructor_restore' instructor.pk %}" hx-target="#instructor-panel" hx-swap="outerHTML"><i class="bi bi-arrow-counterclockwise"></i> Вернуть из архива</button>
+            {% endif %}
+          </div>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% else %}
+<div id="instructor-panel" class="d-none"></div>
+{% endif %}

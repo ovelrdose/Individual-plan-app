@@ -1,0 +1,52 @@
+{# Процедуры — только просмотр (FR-CAT-7): фильтр по виду и поиск; шестерёнка — окно правки. #}
+<div id="procedures-table" data-panel-table{% if oob %} hx-swap-oob="true"{% endif %}>
+  <form id="procedure-filter" class="row g-2 align-items-end mb-3" method="get" action="{% url 'catalog:index' %}">
+    <input type="hidden" name="tab" value="procedures">
+    <div class="col-12 col-md-4">
+      <label class="form-label" for="procedure-kind">Вид</label>
+      <select id="procedure-kind" name="kind" class="form-select" onchange="this.form.requestSubmit()">
+        {% for value, label in kind_filters %}<option value="{{ value }}" {% if value == kind %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-12 col-md-4">
+      <label class="form-label" for="procedure-q">Поиск</label>
+      <input type="search" id="procedure-q" name="q" value="{{ query }}" class="form-control" placeholder="Название или синоним">
+    </div>
+    <div class="col-auto"><button type="submit" class="btn btn-outline-secondary">Найти</button></div>
+    <div class="col-auto ms-auto">
+      <button type="button" class="btn btn-success" hx-get="{% url 'catalog:procedure_add' %}"
+              hx-include="#procedure-filter" hx-target="#procedure-panel" hx-swap="outerHTML">
+        <i class="bi bi-plus-lg"></i> Новая процедура
+      </button>
+    </div>
+  </form>
+
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Название</th>
+          <th>В карте</th>
+          <th>Вид</th>
+          <th>Синонимы</th>
+          <th>Отделение</th>
+          <th style="width: 4rem"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for procedure in procedures %}{% include "catalog/_procedure_row.html" %}{% empty %}
+          <tr><td colspan="6" class="text-body-secondary">Ничего не найдено.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if archived %}
+    <details class="mt-2">
+      <summary class="text-body-secondary">В архиве ({{ archived|length }})</summary>
+      <table class="table table-sm align-middle text-body-secondary mt-2">
+        <tbody>{% for procedure in archived %}{% include "catalog/_procedure_row.html" %}{% endfor %}</tbody>
+      </table>
+    </details>
+  {% endif %}
+</div>

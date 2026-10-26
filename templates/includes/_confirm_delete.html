@@ -1,0 +1,26 @@
+{# Шаг подтверждения «Удалить» в окне правки (решения 82, 83): ни разу не использованное #}
+{# удаляется совсем (unused_text), использованное — в архив (used_text). confirm: used, #}
+{# programs (сколько текущих программ пересоберётся, None — не показывать), details, url. #}
+{# target — окно, cancel_url — вернуться к правке, include — фильтр таблицы (hx-include). #}
+{# blocked — удалить сейчас нельзя: только «Отмена». #}
+<div class="alert alert-warning">
+  {% if confirm.used %}
+    {{ used_text }}
+    {% if confirm.programs is not None %}<div class="fw-semibold mt-1">Будет затронуто текущих программ: {{ confirm.programs }}{% if confirm.programs %} — их расписание пересоберётся{% endif %}.</div>{% endif %}
+  {% else %}
+    {{ unused_text }}
+  {% endif %}
+  {% for line in confirm.details %}<div class="mt-1">{{ line }}</div>{% endfor %}
+  <div class="d-flex gap-2 mt-2">
+    {% if not confirm.blocked %}
+      <button type="button" class="btn btn-sm btn-danger"
+              hx-post="{{ confirm.url }}" hx-vals='{"confirm": "1"}' {% if include %}hx-include="{{ include }}"{% endif %}
+              hx-target="{{ target }}" hx-swap="outerHTML">
+        <i class="bi bi-trash"></i> Удалить
+      </button>
+    {% endif %}
+    <button type="button" class="btn btn-sm btn-link"
+            hx-get="{{ cancel_url }}" {% if include %}hx-include="{{ include }}"{% endif %}
+            hx-target="{{ target }}" hx-swap="outerHTML">Отмена</button>
+  </div>
+</div>

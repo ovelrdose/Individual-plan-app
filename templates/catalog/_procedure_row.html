@@ -1,0 +1,23 @@
+<tr{% if procedure.pk == selected %} class="table-active"{% endif %}>
+  <td>{{ procedure.name }}</td>
+  <td>{{ procedure.card_label }}</td>
+  <td>
+    {{ procedure.get_kind_display }}
+    {% if procedure.group_choice %}<span class="badge text-bg-light border">без группы</span>{% endif %}
+    {% if procedure.evening_individual %}<span class="badge text-bg-light border">вечернее</span>{% endif %}
+  </td>
+  <td class="small text-body-secondary">{{ procedure.synonyms|join:", " }}</td>
+  <td>{{ procedure.department.name|default:"общая" }}</td>
+  <td class="text-end">
+    {% if procedure.department and not procedure.department.is_active %}
+      <span class="badge text-bg-secondary" title="Процедуры отделения в архиве — только просмотр">отделение в архиве</span>
+    {% elif procedure.is_group %}
+      <a class="btn btn-sm btn-outline-secondary" title="Правится в «Групповых занятиях»"
+         href="{% url 'scheduling:group_schedule' %}?section={{ procedure.section_id }}"><i class="bi bi-box-arrow-up-right"></i></a>
+    {% else %}
+      <button type="button" class="btn btn-sm btn-outline-secondary" title="Изменить"
+              hx-get="{% url 'catalog:procedure_edit' procedure.pk %}" hx-include="#procedure-filter"
+              hx-target="#procedure-panel" hx-swap="outerHTML"><i class="bi bi-gear"></i></button>
+    {% endif %}
+  </td>
+</tr>

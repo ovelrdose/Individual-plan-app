@@ -1,0 +1,16 @@
+{# Сетка слотов инструкторов — только просмотр (FR-CAT-5): она задаёт шахматку. #}
+<p class="text-body-secondary small">Сетка одна на центр и задаёт расписание инструкторов — здесь только просмотр.</p>
+<table class="table table-sm align-middle w-auto">
+  <thead class="table-light"><tr><th>Начало</th><th>Конец</th><th>Вечерний</th></tr></thead>
+  <tbody>
+    {% for slot in slots %}
+      <tr>
+        <td>{{ slot.start|time:"G:i" }}</td>
+        <td>{{ slot.end|time:"G:i" }}</td>
+        <td>{% if slot.is_evening %}да <span class="small text-body-secondary">— подбор не использует</span>{% endif %}</td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="3" class="text-body-secondary">Сетка пуста.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

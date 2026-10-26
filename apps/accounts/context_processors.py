@@ -16,4 +16,7 @@ def department(request: HttpRequest) -> dict:
         "can_edit_group_schedule": has_right(user, Right.GROUP_SCHEDULE),
         "can_manage_staff": has_right(user, Right.STAFF),
         "can_manage_users": has_right(user, Right.USERS),
+        # «Справочники»: процедуры и инструкторы — право «Справочники», журнал выгрузок —
+        # «Пользователи» (решение 83).
+        "can_open_catalog": has_right(user, Right.CATALOG) or has_right(user, Right.USERS),
     }

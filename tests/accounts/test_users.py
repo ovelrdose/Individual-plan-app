@@ -108,7 +108,7 @@ class TestCreateAndEdit:
         doctor.refresh_from_db()
         assert doctor.rights == [Right.PROGRAMS_EDIT, Right.PROGRAMS_DELETE, Right.CATALOG]
         assert list(doctor.departments.all()) == [other_department]
-        assert doctor.is_staff, "«Справочники» открывают админку"
+        assert not doctor.is_staff, "админка — только суперпользователю (решение 83)"
         assert doctor.check_password(PASSWORD), "пароль при правке не меняется"
 
     def test_presets_on_form(self, client, boss, department):

@@ -1,0 +1,29 @@
+{# Отделения — только просмотр (FR-ORG-3); шестерёнка — окно правки, архив свёрнут внизу. #}
+<div id="departments-table" data-panel-table{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Название</th>
+          <th>Код</th>
+          <th>Курс, дней: ШРМ 3 / 4 / 5 / УК</th>
+          <th title="Индивидуальных занятий в день, не больше">Инд. в день</th>
+          <th style="width: 4rem"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for department in departments %}{% include "accounts/_department_row.html" %}{% empty %}
+          <tr><td colspan="5" class="text-body-secondary">Отделений нет.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if archived %}
+    <details class="mt-2">
+      <summary class="text-body-secondary">В архиве ({{ archived|length }})</summary>
+      <table class="table table-sm align-middle text-body-secondary mt-2">
+        <tbody>{% for department in archived %}{% include "accounts/_department_row.html" %}{% endfor %}</tbody>
+      </table>
+    </details>
+  {% endif %}
+</div>

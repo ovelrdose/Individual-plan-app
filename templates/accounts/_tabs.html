@@ -1,0 +1,5 @@
+{# Вкладки экрана «Пользователи»: пользователи и отделения (решение 83). #}
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item"><a class="nav-link {% if tab == 'users' %}active{% endif %}" href="{% url 'users:list' %}" {% if tab == 'users' %}aria-current="page"{% endif %}>Пользователи</a></li>
+  <li class="nav-item"><a class="nav-link {% if tab == 'departments' %}active{% endif %}" href="{% url 'users:departments' %}" {% if tab == 'departments' %}aria-current="page"{% endif %}>Отделения</a></li>
+</ul>

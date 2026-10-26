@@ -1,4 +1,5 @@
-{# Тренажёры — только просмотр: шестерёнка открывает окно правки (решение 82). #}
+{# Тренажёры — только просмотр: шестерёнка открывает окно правки (решения 82, 83). #}
+{# Архив (удалённые, но использованные тренажёры) — свёрнут внизу. #}
 <div id="equipment-table" data-panel-table{% if oob %} hx-swap-oob="true"{% endif %}>
   <div class="mb-3">
     <button type="button" class="btn btn-sm btn-success"
@@ -15,28 +16,27 @@
         <th title="Шаг записи, мин">Шаг</th>
         <th title="Длительность, мин">Мин</th>
         <th title="Пациентов на одно время (столько ставит подбор)">Мест</th>
-        <th>Действует</th>
         <th style="width: 4rem"></th>
       </tr>
     </thead>
     <tbody>
       {% for equipment in equipment_list %}
-        <tr class="{% if equipment.pk == selected %}table-active{% endif %}{% if not equipment.is_active %} text-body-secondary{% endif %}">
-          <td>{{ equipment.name }}</td>
-          <td>{{ equipment.window_start|time:"G:i" }}–{{ equipment.window_end|time:"G:i" }}</td>
-          <td>{{ equipment.step_min }}</td>
-          <td>{{ equipment.duration_min }}</td>
-          <td>{{ equipment.capacity }}</td>
-          <td>{% if equipment.is_active %}<i class="bi bi-check-lg text-success" aria-label="да"></i>{% else %}нет{% endif %}</td>
-          <td class="text-end">
-            <button type="button" class="btn btn-sm btn-outline-secondary" title="Изменить"
-                    hx-get="{% url 'scheduling:equipment_edit' equipment.pk %}" hx-target="#equipment-panel" hx-swap="outerHTML"><i class="bi bi-gear"></i></button>
-          </td>
-        </tr>
+        {% include "scheduling/_equipment_row.html" %}
       {% empty %}
-        <tr><td colspan="7" class="text-body-secondary">Тренажёров нет.</td></tr>
+        <tr><td colspan="6" class="text-body-secondary">Тренажёров нет.</td></tr>
       {% endfor %}
     </tbody>
   </table>
   </div>
+
+  {% if archived %}
+    <details class="mt-2">
+      <summary class="text-body-secondary">В архиве ({{ archived|length }})</summary>
+      <table class="table table-sm align-middle text-body-secondary mt-2">
+        <tbody>
+          {% for equipment in archived %}{% include "scheduling/_equipment_row.html" %}{% endfor %}
+        </tbody>
+      </table>
+    </details>
+  {% endif %}
 </div>
