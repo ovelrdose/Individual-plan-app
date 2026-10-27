@@ -200,11 +200,20 @@ class BoardPatient(models.Model):
         return f"{self.date:%d.%m} {self.program}"
 
 
+class RemovedKind(models.TextChoices):
+    """Почему занятие не стоит в дату (решение 84)."""
+
+    REMOVED = "", "убрано"  # на странице программы — «Вернуть» там же
+    HELD = "held", "не распределено"  # тренажёр снят в «Не распределены» в шахматке
+    CANCELLED = "cancelled", "отменено"  # тренажёр снят в «Отменены» в шахматке
+
+
 class RemovedSession(models.Model):
     """Занятие назначения, убранное вручную в дату (шахматка, страница программы).
 
     Подбор считает его как закреплённое: в эту дату ставит на ``units`` занятий меньше. Иначе
-    пересборка после любой правки назначений вернула бы убранное занятие на место.
+    пересборка после любой правки назначений вернула бы убранное занятие на место. ``kind``
+    различает, где пациент виден: снятые в шахматке тренажёры — в её блоках (FR-SCH-11a).
     """
 
     prescription = models.ForeignKey(
@@ -214,6 +223,9 @@ class RemovedSession(models.Model):
         verbose_name="назначение",
     )
     date = models.DateField("дата")
+    kind = models.CharField(
+        "где", max_length=10, choices=RemovedKind.choices, default=RemovedKind.REMOVED, blank=True
+    )
     units = models.PositiveSmallIntegerField("сколько занятий убрано", default=1)
 
     history = HistoricalRecords()
@@ -224,9 +236,9 @@ class RemovedSession(models.Model):
         ordering = ["date"]
         constraints = [
             models.UniqueConstraint(
-                fields=["prescription", "date"], name="removed_session_unique_date"
+                fields=["prescription", "date", "kind"], name="removed_session_unique_date"
             ),
         ]
 
     def __str__(self) -> str:
-        return f"{self.date:%d.%m} {self.prescription}: убрано {self.units}"
+        return f"{self.date:%d.%m} {self.prescription}: {self.get_kind_display()} {self.units}"

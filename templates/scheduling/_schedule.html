@@ -162,13 +162,14 @@
                       {% elif cell.pending %}<span class="text-body-secondary" title="Расписание на этот день ещё не составлялось">…</span>{% endif %}
                     </td>
                   {% else %}
-                  <td class="{% if cell.deviation %}table-warning{% elif cell.active and not cell.bookings and not cell.removed %}table-danger{% elif not cell.active %}table-secondary{% endif %}">
+                  <td class="{% if cell.deviation %}table-warning{% elif cell.active and not cell.bookings and not cell.removed and cell.hold != 'отменён' %}table-danger{% elif not cell.active %}table-secondary{% endif %}">
                     {% for booking in cell.bookings %}
                       {% if can_schedule %}
                         <button type="button" class="btn btn-link btn-sm p-0 text-reset text-decoration-none"
                                 hx-get="{% url 'scheduling:booking_panel' booking.pk %}" hx-target="#booking-panel" hx-swap="outerHTML"
                                 title="Изменить занятие {{ row.date|date:'d.m' }}">{{ booking.start|time:"G:i" }}{% if booking.instructor %} {{ booking.instructor.short_name }}{% endif %}</button>{% else %}{{ booking.start|time:"G:i" }}{% if booking.instructor %} {{ booking.instructor.short_name }}{% endif %}{% endif %}{% if booking.pinned %}<i class="bi bi-pin-angle" title="Поставлено вручную"></i>{% endif %}{% if not forloop.last %}, {% endif %}
-                    {% empty %}{% if cell.active and not cell.removed %}—{% endif %}{% endfor %}
+                    {% empty %}{% if cell.active and not cell.removed and not cell.hold %}—{% endif %}{% endfor %}
+                    {% if cell.hold %}<span class="{% if cell.hold == 'не распределён' %}text-danger{% else %}text-body-secondary{% endif %}" title="Тренажёр снят в расписании — поставить можно там">{{ cell.hold }}</span>{% endif %}
                     {% if cell.removed %}
                       <span class="text-body-secondary">убрано</span>
                       {% if can_schedule %}

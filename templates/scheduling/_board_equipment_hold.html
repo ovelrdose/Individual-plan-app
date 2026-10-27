@@ -1,0 +1,12 @@
+{# Пациенты в блоке тренажёра (FR-SCH-11a): items — [(пациент, число занятий)], block — unplaced / cancelled. #}
+{% for patient, units in items %}
+  {% if board.can_edit and patient.program_id %}
+    <div class="board-chip" draggable="true" data-drag data-equipment="{{ hold.equipment.pk }}"
+         data-prescription="{{ patient.prescription_id }}" data-source="{{ block }}" data-busy="{{ patient.busy }}"
+         title="Перетащите на время этого тренажёра или в другой блок">{{ patient.label }}{% if units > 1 %} ×{{ units }}{% endif %}</div>
+  {% elif patient.program_id %}
+    <div><a href="{% url 'programs:detail' patient.program_id %}">{{ patient.label }}</a>{% if units > 1 %} ×{{ units }}{% endif %}</div>
+  {% else %}
+    <div>{{ patient.label }}{% if units > 1 %} ×{{ units }}{% endif %}</div>
+  {% endif %}
+{% endfor %}

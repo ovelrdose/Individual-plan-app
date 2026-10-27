@@ -16,6 +16,7 @@ env = environ.Env(
     BEHIND_PROXY=(bool, False),
     SECURE_HSTS_SECONDS=(int, 0),
     LOG_LEVEL=(str, "INFO"),
+    DB_POOL_MAX_SIZE=(int, 10),
 )
 environ.Env.read_env(BASE_DIR / ".env")
 
@@ -79,6 +80,17 @@ TEMPLATES = [
 ]
 
 DATABASES = {"default": env.db("DATABASE_URL")}
+# Пул соединений: новое соединение с PostgreSQL стоит 30–40 мс на каждый запрос. Пул — на
+# процесс gunicorn, поэтому всего соединений не больше workers × DB_POOL_MAX_SIZE (3 × 10)
+# при max_connections = 100; поток, которому не хватило соединения, ждёт. 0 — без пула.
+if env("DB_POOL_MAX_SIZE"):
+    DATABASES["default"]["OPTIONS"] = {
+        **DATABASES["default"].get("OPTIONS", {}),
+        "pool": {"min_size": 2, "max_size": env("DB_POOL_MAX_SIZE"), "timeout": 20},
+    }
+# Соединение проверяется перед выдачей из пула: после перезапуска PostgreSQL (обновления
+# безопасности ставятся сами) оборванное заменяется новым, а не даёт пользователю ошибку 500.
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 AUTH_USER_MODEL = "accounts.User"

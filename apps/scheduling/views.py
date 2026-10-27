@@ -1,6 +1,6 @@
 import ipaddress
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, time, timedelta
 from typing import Any
 from urllib.parse import quote
@@ -23,6 +23,7 @@ from apps.catalog.models import (
     GroupSession,
     InstructorSlot,
     Procedure,
+    ProcedureKind,
     Section,
 )
 from apps.programs.models import Prescription, Program
@@ -690,21 +691,133 @@ def board_move(request: HttpRequest, pk: int) -> HttpResponse:
 
 @require_POST
 def board_equipment_move(request: HttpRequest, pk: int) -> HttpResponse:
-    """Перенести пациента на другое время тренажёра перетаскиванием (FR-SCH-10a). Сверх
-    вместимости или вне окна — панель с вопросом о причине, ошибка — панель с текстом."""
+    """Перенести пациента на другое время тренажёра перетаскиванием (FR-SCH-10a, 11a): на эту
+    дату и следующие. Сверх вместимости или вне окна — панель с вопросом о причине, ошибка —
+    панель с текстом."""
     if not board.can_edit_board(request.user):
         raise PermissionDenied("Нет права править расписание пациентов.")
     booking = get_object_or_404(
         Booking.objects.select_related("program", "equipment"), pk=pk, kind=BookingKind.EQUIPMENT
     )
-    try:
-        start = time.fromisoformat(request.POST.get("start", "").strip())
-    except ValueError:
-        raise Http404("Неверное время.") from None
+    start = _start(request.POST.get("start"))
     version = _int(request.POST.get("version"))
-    context = {"booking": booking, "start": start, "version": version}
+    panel = _EquipmentPanel(
+        f"{booking.equipment.name}, {booking.date:%d.%m}: {booking.program.room_label} "
+        f"{booking.program.surname} → {start:%-H:%M}",
+        reverse("scheduling:board_equipment_move", args=[booking.pk]),
+        {"start": f"{start:%H:%M}", "version": version},
+    )
+    return _equipment_act(
+        request,
+        panel,
+        booking.date,
+        lambda reason, confirmed: board.move_equipment(
+            request.user, booking, version, start, reason, confirmed
+        ),
+        "Время тренажёра изменено.",
+    )
+
+
+@require_POST
+def board_equipment_place(request: HttpRequest) -> HttpResponse:
+    """Поставить пациента из блока тренажёра на время перетаскиванием (FR-SCH-11a)."""
+    if not board.can_edit_board(request.user):
+        raise PermissionDenied("Нет права править расписание пациентов.")
+    prescription = get_object_or_404(
+        Prescription.objects.select_related("program", "procedure__equipment"),
+        pk=_int(request.POST.get("prescription")),
+        procedure__kind=ProcedureKind.EQUIPMENT,
+    )
+    day = _date(request.POST.get("date"))
+    start = _start(request.POST.get("start"))
+    source = request.POST.get("source", "")
+    program = prescription.program
+    panel = _EquipmentPanel(
+        f"{prescription.procedure.equipment.name}, {day:%d.%m}: {program.room_label} "
+        f"{program.surname} → {start:%-H:%M}",
+        reverse("scheduling:board_equipment_place"),
+        {
+            "prescription": prescription.pk,
+            "date": day.isoformat(),
+            "start": f"{start:%H:%M}",
+            "source": source,
+        },
+    )
+    return _equipment_act(
+        request,
+        panel,
+        day,
+        lambda reason, confirmed: board.place_equipment(
+            request.user, prescription, day, start, source, reason, confirmed
+        ),
+        "Пациент поставлен на тренажёр.",
+    )
+
+
+@require_POST
+def board_equipment_hold(request: HttpRequest) -> HttpResponse:
+    """Снять тренажёр в блок «Не распределены» или «Отменены» перетаскиванием — из сетки
+    (``booking``) или из другого блока (``prescription``, ``source``) (FR-SCH-11a)."""
+    if not board.can_edit_board(request.user):
+        raise PermissionDenied("Нет права править расписание пациентов.")
+    target = request.POST.get("target", "")
+    booking = prescription = None
+    if request.POST.get("booking"):
+        booking = get_object_or_404(
+            Booking.objects.select_related("program", "equipment"),
+            pk=_int(request.POST.get("booking")),
+            kind=BookingKind.EQUIPMENT,
+        )
+        day, program, name = booking.date, booking.program, booking.equipment.name
+    else:
+        prescription = get_object_or_404(
+            Prescription.objects.select_related("program", "procedure__equipment"),
+            pk=_int(request.POST.get("prescription")),
+            procedure__kind=ProcedureKind.EQUIPMENT,
+        )
+        day, program = _date(request.POST.get("date")), prescription.program
+        name = prescription.procedure.equipment.name
+    title = board.CANDIDATE_GROUPS.get(target, "")
+    panel = _EquipmentPanel(
+        f"{name}, {day:%d.%m}: {program.room_label} {program.surname} → {title}"
+    )
+    return _equipment_act(
+        request,
+        panel,
+        day,
+        lambda _reason, _confirmed: board.hold_equipment(
+            request.user,
+            target,
+            day,
+            booking=booking,
+            version=_int(request.POST.get("version")) if booking else None,
+            prescription=prescription,
+            source=request.POST.get("source", ""),
+        ),
+        f"Пациент в блоке «{title}» с {day:%d.%m} и на следующие дни.",
+    )
+
+
+@dataclass(frozen=True)
+class _EquipmentPanel:
+    """Панель тренажёра в шахматке: заголовок и куда повторить действие с причиной."""
+
+    heading: str
+    confirm_url: str = ""
+    hidden: dict = field(default_factory=dict)
+
+
+def _equipment_act(
+    request: HttpRequest,
+    panel: _EquipmentPanel,
+    day: date,
+    action: Callable[[str, bool], manual.EditResult],
+    done: str,
+) -> HttpResponse:
+    context = {"heading": panel.heading, "confirm_url": panel.confirm_url, "hidden": panel.hidden}
     try:
-        board.move_equipment(request.user, booking, version, start, request.POST.get("reason", ""))
+        # Подтверждение из панели — с причиной или без (решение 85).
+        result = action(request.POST.get("reason", ""), request.POST.get("confirmed") == "1")
     except board.ConfirmationRequired as error:
         return render(
             request, "scheduling/_board_equipment.html", {**context, "confirm": error.violations}
@@ -714,8 +827,22 @@ def board_equipment_move(request: HttpRequest, pk: int) -> HttpResponse:
     return render(
         request,
         "scheduling/_board_done.html",
-        {"done": "Время тренажёра изменено.", "board": board.board(request.user, booking.date)},
+        {"done": done, "skipped": result.skipped, "board": board.board(request.user, day)},
     )
+
+
+def _start(value: str | None) -> time:
+    try:
+        return time.fromisoformat((value or "").strip())
+    except ValueError:
+        raise Http404("Неверное время.") from None
+
+
+def _date(value: str | None) -> date:
+    try:
+        return date.fromisoformat((value or "").strip())
+    except ValueError:
+        raise Http404("Неверная дата.") from None
 
 
 def _equipment_booking(request: HttpRequest, pk: int) -> Booking:

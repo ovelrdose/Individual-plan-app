@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date, time
+from datetime import date, time, timedelta
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
@@ -28,6 +28,7 @@ from apps.catalog.models import (
 from apps.live import events as live
 from apps.live import topics as live_topics
 from apps.org.models import Department
+from apps.programs.domain import room_sort_key
 from apps.programs.models import Prescription, Program, withdrawn_on
 from apps.staff.models import Instructor, InstructorBlock, InstructorDuty
 
@@ -55,6 +56,7 @@ from .models import (
     Booking,
     BookingKind,
     BookingSource,
+    RemovedKind,
     RemovedSession,
 )
 
@@ -265,7 +267,7 @@ def _short(instructor: Instructor | None) -> str:
 
 
 @transaction.atomic
-def replan(program: Program) -> Proposal:
+def replan(program: Program, *, refill: bool = True, keep_today: bool = False) -> Proposal:
     """Перестраивает расписание программы: незакреплённые занятия групп, бассейна и
     тренажёров удаляются и подбираются заново по текущим назначениям, дням занятий и
     расписанию групп (FR-SCH-1, FR-SCH-2). Индивидуальные живут в шахматке на день вперёд:
@@ -276,6 +278,10 @@ def replan(program: Program) -> Proposal:
     оказались вне курса или вне дат назначения.
 
     Порядок блокировок везде один: программа → тренажёры → инструкторы → шахматки.
+
+    ``refill`` — если у тренажёра освободилось место с завтрашнего дня, ждущие его пациенты
+    встают сами (FR-SCH-11a). ``keep_today`` — так встают ждущие: сегодняшние тренажёры не
+    меняются, в сегодняшний день ждущих ставит специалист.
     """
     program = (
         Program.objects.select_for_update(of=("self",))
@@ -290,14 +296,11 @@ def replan(program: Program) -> Proposal:
     equipment_ids = sorted(
         {p.procedure.equipment_id for p in prescriptions if p.procedure.equipment_id}
     )
-    # Блокируем тренажёры по порядку: два параллельных подбора не превысят вместимость
-    # и не заблокируют друг друга.
-    equipment = {
-        e.pk: e
-        for e in Equipment.objects.select_for_update().filter(pk__in=equipment_ids).order_by("pk")
-    }
+    every_equipment = lock_equipment()
+    equipment = {pk: every_equipment[pk] for pk in equipment_ids if pk in every_equipment}
     board_days.ensure_boards()
     board_days.lock()
+    today = board_days.today()
 
     # Индивидуальные в составленных шахматках (сегодня и дальше) на время пересборки снимаем:
     # группы идут по своему расписанию, а пациент потом сверяется с шахматкой — занятие,
@@ -315,7 +318,13 @@ def replan(program: Program) -> Proposal:
     bookings = list(program.bookings.select_related("group_session"))
     # Автоматические занятия пересоздаются целиком и без журнала (TZ.md §13, п. 30):
     # иначе каждая правка назначения писала бы в историю сотни строк.
-    automatic = [b for b in bookings if not b.pinned and b.kind in AUTO_KINDS]
+    automatic = [
+        b
+        for b in bookings
+        if not b.pinned
+        and b.kind in AUTO_KINDS
+        and not (keep_today and b.kind == BookingKind.EQUIPMENT and b.date == today)
+    ]
     # Пометки тренажёров переходят на следующие дни, как у индивидуальных (FR-SCH-10):
     # новая запись берёт пометку ближайшего прошлого дня того же назначения.
     notes = _equipment_notes(bookings)
@@ -339,6 +348,10 @@ def replan(program: Program) -> Proposal:
     removed: Counter[tuple[int, date]] = Counter()
     for item in RemovedSession.objects.filter(prescription__program=program):
         removed[(item.prescription_id, item.date)] += item.units
+    if keep_today:
+        for p in prescriptions:
+            if p.procedure.kind == ProcedureKind.EQUIPMENT:
+                active[p.pk].discard(today)
     needs = tuple(
         _need(p, active[p.pk], pinned, equipment, removed, previous.get(p.pk))
         for p in prescriptions
@@ -371,18 +384,146 @@ def replan(program: Program) -> Proposal:
             for placement in proposal.placements
         ]
     )
-    program.schedule_issues = [
+    issues = [
         {"code": issue.code, "message": issue.message, "conflict": issue.is_conflict}
         for issue in proposal.issues
     ]
-    program.save(update_fields=["schedule_issues", "updated_at"])
+    # Предупреждения — производный кэш: без изменений не сохраняем, иначе каждая пересборка
+    # (и добор ждущих) писала бы строку в журнал программы.
+    if issues != program.schedule_issues:
+        program.schedule_issues = issues
+        program.save(update_fields=["schedule_issues", "updated_at"])
     board_days.sync_program(program, seats)
     # Пакетные записи выше сигналов не дают: тренажёры видны и в шахматках (TZ.md NFR-11).
     live.publish(
         live_topics.program(program.pk),
         *(live_topics.board(day) for day in board_days.board_dates(board_days.today())),
     )
+    if refill:
+        # Занятия могли снять и до пересборки (шахматка, выбытие) — поэтому смотрим не на
+        # разницу «до и после», а на свободные места тренажёров этой программы.
+        used = set(equipment_ids) | {b.equipment_id for b in bookings if b.equipment_id}
+        refill_equipment(used, program)
     return proposal
+
+
+def lock_equipment() -> dict[int, Equipment]:
+    """Блокирует все тренажёры по порядку pk — до блокировки шахматок. Не только тренажёры
+    программы: добор ждущих (``refill_equipment``) пересобирает внутри чужие программы с
+    другими тренажёрами, и если бы он блокировал их уже после шахматок, параллельная
+    пересборка, взявшая этот тренажёр и ждущая шахматки, ждала бы его, а он — её. Тренажёров
+    единицы, а пересборки и так идут по одной из-за блокировки шахматок."""
+    return {e.pk: e for e in Equipment.objects.select_for_update().order_by("pk")}
+
+
+def refill_equipment(equipment_ids: set[int], source: Program | None = None) -> list[Program]:
+    """Ждущие тренажёр пациенты встают сами на свободные места с завтрашнего дня, первыми —
+    кто раньше поступил (FR-SCH-11a). Ждущие — с конфликтом «тренажёр не поставлен»;
+    снятые вручную в блоки шахматки подбор не ставит (``RemovedSession``). Пересобираются
+    только те, у кого свободное место приходится на день без тренажёра, и только пока места
+    остаются.
+
+    Программы, которые сейчас правит другой запрос, пропускаются (``skip_locked``): он сам
+    пересоберёт их и увидит свободное место, а ждать его — значит нарушить порядок блокировок.
+    """
+    today = board_days.today()
+    # Добор вызывается после каждой пересборки с тренажёром, а ждущих обычно нет: сначала
+    # один запрос по конфликту, и блокируем только ждущих, а не всех на тренажёре.
+    candidates = (
+        Program.objects.filter(
+            prescriptions__procedure__kind=ProcedureKind.EQUIPMENT,
+            prescriptions__procedure__equipment__in=equipment_ids,
+            end_date__gt=today,
+            schedule_issues__contains=[{"code": IssueCode.EQUIPMENT_UNPLACED.value}],
+        )
+        .exclude(pk=source.pk if source is not None else None)
+        .values("pk")
+    )
+    waiting = list(
+        Program.objects.select_for_update(of=("self",), skip_locked=True)
+        .filter(pk__in=candidates)
+        .select_related("department")
+        .prefetch_related("withdrawals")
+        .order_by("pk")
+    )
+    if not waiting:
+        return []
+    free = _free_equipment_slots(equipment_ids, today)
+    if not free:
+        return []
+    waiting.sort(key=lambda p: (p.start_date, room_sort_key(p.room), p.pk))
+    # Записи ждущего меняет только его собственная пересборка — недостающее считаем один раз.
+    missing = _missing_equipment(waiting, equipment_ids, today)
+    replanned = []
+    for program in waiting:
+        # Пересборка программы стоит дорого, а свободное место обычно одно: пересобираем
+        # только того, кому оно подходит по дню, и заканчиваем, когда мест не осталось.
+        if not missing[program.pk] & free:
+            continue
+        replan(program, refill=False, keep_today=True)
+        replanned.append(program)
+        free = _free_equipment_slots(equipment_ids, today)
+        if not free:
+            break
+    return replanned
+
+
+def _missing_equipment(
+    programs: list[Program], equipment_ids: set[int], today: date
+) -> dict[int, set[tuple[int, date]]]:
+    """Пары (тренажёр, дата) после сегодняшней по программам, где занятие назначено, но не
+    стоит и не убрано."""
+    by_pk = {program.pk: program for program in programs}
+    prescriptions = list(
+        Prescription.objects.filter(
+            program__in=programs,
+            procedure__kind=ProcedureKind.EQUIPMENT,
+            procedure__equipment__in=equipment_ids,
+        ).select_related("procedure")
+    )
+    placed = Counter(
+        Booking.objects.filter(prescription__in=prescriptions, date__gt=today).values_list(
+            "prescription_id", "date"
+        )
+    )
+    removed: Counter[tuple[int, date]] = Counter()
+    for item in RemovedSession.objects.filter(prescription__in=prescriptions, date__gt=today):
+        removed[(item.prescription_id, item.date)] += item.units
+    result: dict[int, set[tuple[int, date]]] = {pk: set() for pk in by_pk}
+    for p in prescriptions:
+        result[p.program_id] |= {
+            (p.procedure.equipment_id, day)
+            for day in _active_dates(by_pk[p.program_id], p)
+            if day > today and placed[(p.pk, day)] + removed[(p.pk, day)] < p.per_day
+        }
+    return result
+
+
+def _free_equipment_slots(equipment_ids: set[int], today: date) -> set[tuple[int, date]]:
+    """Пары (тренажёр, дата) после сегодняшней, где у тренажёра есть свободное время в окне."""
+    items = list(Equipment.objects.filter(pk__in=equipment_ids, is_active=True))
+    if not items:
+        return set()
+    load: dict[tuple[int, date], list[tuple[int, int]]] = defaultdict(list)
+    for equipment_id, day, start, end in Booking.objects.filter(
+        kind=BookingKind.EQUIPMENT, equipment__in=items, date__gt=today
+    ).values_list("equipment_id", "date", "start", "end"):
+        load[(equipment_id, day)].append((_minutes(start), _minutes(end)))
+    last = Program.objects.filter(end_date__gt=today).order_by("-end_date").first()
+    if last is None:
+        return set()
+    days = [today + timedelta(days=n) for n in range(1, (last.end_date - today).days + 1)]
+    result = set()
+    for item in items:
+        starts = [_minutes(s) for s in item.start_times()]
+        for day in days:
+            taken = load.get((item.pk, day), [])
+            if any(
+                sum(1 for a, b in taken if a < s + item.duration_min and s < b) < item.capacity
+                for s in starts
+            ):
+                result.add((item.pk, day))
+    return result
 
 
 def _current_equipment_notes(bookings: list[Booking], today: date) -> dict[int, str]:
@@ -652,22 +793,12 @@ def _end_group_leads(
     (решение 82). Вызывать под блокировкой программ, уже после сохранения занятия.
 
     Инструкторов блокируем в общем порядке: программы → тренажёры → инструкторы →
-    шахматки. Пересборка следом снова возьмёт те же тренажёры — они уже наши, поэтому
-    тренажёры программ с этой группой блокируем раньше инструкторов."""
+    шахматки. Пересборка следом снова возьмёт тренажёры — они уже наши, поэтому блокируем
+    их раньше инструкторов."""
     instructors = staff_changes.group_lead_instructors(session_ids)
     if not instructors:
         return []
-    targets = Program.objects.filter(
-        Q(prescriptions__procedure__in=procedure_ids)
-        | Q(prescriptions__pool_group__in=procedure_ids),
-        end_date__gte=today,
-    ).values("pk")
-    equipment = set(
-        Prescription.objects.filter(
-            program__in=targets, procedure__equipment__isnull=False
-        ).values_list("procedure__equipment", flat=True)
-    )
-    list(Equipment.objects.select_for_update().filter(pk__in=equipment).order_by("pk"))
+    lock_equipment()
     list(Instructor.objects.select_for_update().filter(pk__in=instructors).order_by("pk"))
     return staff_changes.end_group_leads(user, session_ids, today)
 
@@ -1207,14 +1338,18 @@ def replan_for_equipment(
         if save is not None:
             save()
         return []
+    # Пересобираются все программы с этим тренажёром — добирать ждущих отдельно незачем.
     return _replan_current(
-        Q(prescriptions__procedure__equipment=equipment_id), today or board_days.today(), save
+        Q(prescriptions__procedure__equipment=equipment_id),
+        today or board_days.today(),
+        save,
+        refill=False,
     )
 
 
 @transaction.atomic
 def _replan_current(
-    condition: Q, today: date, save: Callable[[], object] | None = None
+    condition: Q, today: date, save: Callable[[], object] | None = None, *, refill: bool = True
 ) -> list[Program]:
     # Порядок блокировок везде один: программы (по pk) → тренажёры → инструкторы. Программы
     # блокируем все сразу и до сохранения справочника (``save``): иначе правка назначения
@@ -1228,8 +1363,19 @@ def _replan_current(
     )
     if save is not None:
         save()
-    for program in programs:
-        replan(program)
+    # Места делятся по очереди: кто раньше поступил, тот первым (FR-SCH-11a).
+    for program in sorted(programs, key=lambda p: (p.start_date, room_sort_key(p.room), p.pk)):
+        replan(program, refill=False)
+    if refill and programs:
+        # Добор — один раз в конце: после каждой программы он стоил бы сотни запросов, а
+        # места, освобождённые последними в очереди, всё равно видны только в конце.
+        equipment_ids = set(
+            Prescription.objects.filter(
+                program__in=programs, procedure__kind=ProcedureKind.EQUIPMENT
+            ).values_list("procedure__equipment", flat=True)
+        ) - {None}
+        if equipment_ids:
+            refill_equipment(equipment_ids)
     return programs
 
 
@@ -1376,10 +1522,16 @@ def program_schedule(program: Program) -> ProgramSchedule:
     for b in bookings:
         by_day[(b.date, b.prescription_id)].append(b)
     deviations = {(day, row.key) for row in typical for day in row.deviations}
-    removed = {
-        (item.date, item.prescription_id): item.units
-        for item in RemovedSession.objects.filter(prescription__program=program)
-    }
+    removed: dict[tuple[date, int], int] = {}
+    # Тренажёр, снятый в блок шахматки: в календаре — в каком он блоке (FR-SCH-11a).
+    held: dict[tuple[date, int], str] = {}
+    for item in RemovedSession.objects.filter(prescription__program=program):
+        if item.kind == RemovedKind.REMOVED:
+            removed[(item.date, item.prescription_id)] = item.units
+        elif item.kind == RemovedKind.CANCELLED or (item.date, item.prescription_id) not in held:
+            held[(item.date, item.prescription_id)] = (
+                "отменён" if item.kind == RemovedKind.CANCELLED else "не распределён"
+            )
     boards = set(BoardDay.objects.filter(date__gte=today).values_list("date", flat=True))
     holds = {
         item.date: item for item in BoardPatient.objects.filter(program=program, date__in=boards)
@@ -1392,6 +1544,7 @@ def program_schedule(program: Program) -> ProgramSchedule:
                     program, column, day, by_day.get((day, column.pk), []),
                     deviation=(day, column.pk) in deviations,
                     removed=removed.get((day, column.pk), 0),
+                    held=held.get((day, column.pk), ""),
                     board=day in boards, past=day < today, hold=holds.get(day),
                 )
                 for column in columns
@@ -1498,10 +1651,11 @@ def _calendar_cell(
     board: bool,
     past: bool,
     hold: BoardPatient | None,
+    held: str = "",
 ) -> CalendarCell:
     active = _is_active(column, program, day)
     if column.procedure.kind != ProcedureKind.INDIVIDUAL:
-        return CalendarCell(bookings, deviation, active, removed)
+        return CalendarCell(bookings, deviation, active, removed, hold=held)
     text = ""
     if hold is not None and hold.unplaced:
         text = "не распределён"

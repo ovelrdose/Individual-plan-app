@@ -1,4 +1,6 @@
+import psycopg
 import pytest
+from django.conf import settings
 from django.db import connection
 from django.urls import reverse
 
@@ -7,6 +9,30 @@ from django.urls import reverse
 def test_database_is_postgresql():
     assert connection.vendor == "postgresql"
     assert connection.pg_version >= 160000
+
+
+def test_database_pool_checks_connections():
+    """Пул соединений с проверкой перед выдачей: оборванное после перезапуска PostgreSQL
+    соединение заменяется новым (docs/deploy.md, DB_POOL_MAX_SIZE)."""
+    database = settings.DATABASES["default"]
+    assert database["OPTIONS"]["pool"]["max_size"] >= 1
+    assert database["CONN_HEALTH_CHECKS"] is True
+    assert database.get("CONN_MAX_AGE", 0) == 0  # с пулом постоянные соединения запрещены
+
+
+@pytest.mark.django_db(transaction=True)
+def test_pool_replaces_broken_connections():
+    """Перезапуск PostgreSQL обрывает соединения, ждущие в пуле, — запрос их не получает."""
+    connection.ensure_connection()
+    connection.close()  # с пулом соединение не закрывается, а возвращается в пул
+    with psycopg.connect(**connection.get_connection_params(), autocommit=True) as admin:
+        admin.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
+            " WHERE datname = current_database() AND pid <> pg_backend_pid()"
+        )
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT 1")
+        assert cursor.fetchone() == (1,)
 
 
 def test_home_page(client, doctor):

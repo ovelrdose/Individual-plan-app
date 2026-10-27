@@ -1,6 +1,7 @@
 // Шахматка: перетаскивание пациентов между ячейками и из блоков «Не распределены» /
-// «Отменены» в сетку, а в тренажёрах — на другое время того же тренажёра; красным — время,
-// где у пациента другие занятия (TZ.md FR-SCH-10a).
+// «Отменены» в сетку, а в тренажёрах — на другое время того же тренажёра и между временем
+// и блоками тренажёра (FR-SCH-11a); красным — время, где у пациента другие занятия
+// (TZ.md FR-SCH-10a).
 // Обработчики висят на document: после каждого действия шахматка приходит заново
 // (hx-swap-oob), а слушатели остаются.
 (function () {
@@ -96,6 +97,8 @@
     if (!seat || !seat.closest("#board")) return null;
     // Тренажёр задан процедурой: переносится только по времени, в своей колонке.
     if (dragged.equipment && seat.dataset.equipmentDrop !== dragged.equipment) return null;
+    // Из блока тренажёра в тот же блок тащить незачем.
+    if (dragged.source && seat.dataset.hold === dragged.source) return null;
     return seat;
   }
 
@@ -107,6 +110,8 @@
       version: chip.dataset.version || "",
       program: chip.dataset.program || "",
       equipment: chip.dataset.equipment || "",
+      prescription: chip.dataset.prescription || "",
+      source: chip.dataset.source || "",
     };
     showBusy(chip.dataset.busy);
     // Пока пациента тащат, обновление шахматки от других пользователей ждёт (live.js).
@@ -147,7 +152,26 @@
     const board = document.getElementById("board");
     let url;
     let values;
-    if (data.equipment) {
+    if (data.equipment && seat.dataset.hold) {
+      // В блок тренажёра: из сетки — запись, из другого блока — назначение.
+      url = board.dataset.equipmentHoldUrl;
+      values = { target: seat.dataset.hold, date: board.dataset.date };
+      if (data.booking) {
+        values.booking = data.booking;
+        values.version = data.version;
+      } else {
+        values.prescription = data.prescription;
+        values.source = data.source;
+      }
+    } else if (data.equipment && data.source) {
+      url = board.dataset.equipmentPlaceUrl;
+      values = {
+        prescription: data.prescription,
+        source: data.source,
+        date: board.dataset.date,
+        start: seat.dataset.start,
+      };
+    } else if (data.equipment) {
       url = board.dataset.equipmentMoveUrl.replace("/0/", "/" + data.booking + "/");
       values = { start: seat.dataset.start, version: data.version };
     } else {

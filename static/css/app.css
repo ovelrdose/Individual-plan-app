@@ -69,6 +69,8 @@ body {
 .board-seat[data-drop]:hover { background: var(--bs-primary-bg-subtle); }
 .board-drop { outline: 2px dashed var(--bs-primary); background: var(--bs-primary-bg-subtle); }
 .board-chip[draggable="true"] { cursor: grab; }
+/* Тренажёр поставлен вручную (закреплён) — подбор его не двигает (решение 85). */
+.board-pin { font-size: .75em; margin-right: .15em; color: var(--bs-secondary-color); }
 /* Время, где у переносимого пациента другие занятия (FR-SCH-10a). */
 .board-table tr.board-conflict > *, .board-table td.board-conflict { background: var(--bs-danger-bg-subtle); }
 .board-table tr.board-conflict > .board-time { color: var(--bs-danger-text-emphasis); font-weight: 600; }

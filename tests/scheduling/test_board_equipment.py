@@ -57,8 +57,8 @@ class TestService:
 
         moved = equipment_on(first, TUE)
         assert (moved.start, moved.end, moved.pinned) == (time(14, 30), time(14, 45), True)
-        # Только эта дата: в среду время прежнее.
-        assert equipment_on(first, date(2026, 10, 7)).start == booking.start
+        # Эта дата и следующие (FR-SCH-11a): в среду тоже новое время.
+        assert equipment_on(first, date(2026, 10, 7)).start == time(14, 30)
 
     def test_over_capacity_needs_reason_and_keeps_it_as_note(self, two, rehab):
         first, second = two
@@ -149,10 +149,35 @@ class TestScreen:
         text = page.content.decode()
         assert "при вместимости 1" in text and 'name="reason"' in text
         assert equipment_on(second, TUE).start != equipment_on(first, TUE).start
+        assert 'name="confirmed"' in text and "required" not in text
         client.post(
             self.url(booking), {"start": start, "version": booking.version, "reason": "по просьбе"}
         )
         assert equipment_on(second, TUE).note == "по просьбе"
+
+    def test_over_capacity_confirmed_without_reason(self, client, two, rehab):
+        client.force_login(rehab)
+        first, second = two
+        booking = equipment_on(second, TUE)
+        start = equipment_on(first, TUE).start
+
+        page = client.post(
+            self.url(booking),
+            {"start": f"{start:%H:%M}", "version": booking.version, "confirmed": "1"},
+        ).content.decode()
+
+        assert "Время тренажёра изменено" in page
+        assert equipment_on(second, TUE).start == start
+        assert equipment_on(second, WED).start == equipment_on(first, WED).start
+
+    def test_pinned_shown_with_pin(self, client, two, rehab):
+        client.force_login(rehab)
+        booking = equipment_on(two[0], TUE)
+        board.move_equipment(rehab, booking, booking.version, time(14, 30))
+
+        page = client.get(reverse("scheduling:board"), {"date": "2026-10-06"}).content.decode()
+
+        assert page.count("bi-pin-angle") == 1
 
     def test_bad_time_is_404(self, client, two, rehab):
         client.force_login(rehab)
@@ -242,7 +267,8 @@ class TestNote:
         added = first.bookings.filter(kind=BookingKind.EQUIPMENT, date__gt=last - timedelta(1))
         assert added.exists() and set(added.values_list("note", flat=True)) == {"art"}
 
-    def test_capacity_reason_stays_on_its_day(self, two, rehab):
+    def test_capacity_reason_on_every_moved_day(self, two, rehab):
+        """Сверх вместимости ставится на все дни (решение 85) — причина пометкой в каждом."""
         first, second = two
         booking = equipment_on(second, TUE)
         board.move_equipment(
@@ -250,7 +276,21 @@ class TestNote:
         )
         replan(second)
         assert equipment_on(second, TUE).note == "держит 15 мин"
-        assert equipment_on(second, WED).note == ""
+        assert equipment_on(second, WED).note == "держит 15 мин"
+
+    def test_confirmed_without_reason_keeps_note(self, two, rehab):
+        """Без причины пометка не затирается."""
+        first, second = two
+        booking = equipment_on(second, TUE)
+        board.set_equipment_note(rehab, booking, booking.version, "art")
+        booking = equipment_on(second, TUE)
+
+        board.move_equipment(
+            rehab, booking, booking.version, equipment_on(first, TUE).start, confirmed=True
+        )
+
+        moved = equipment_on(second, WED)
+        assert (moved.start, moved.note) == (equipment_on(first, WED).start, "art")
 
     def test_empty_clears(self, two, rehab):
         booking = equipment_on(two[0], TUE)

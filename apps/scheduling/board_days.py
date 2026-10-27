@@ -129,9 +129,26 @@ def sync_program(program: Program, seats: dict[date, list[Seat]] | None = None) 
     current = today()
     ensure_boards(current)
     lock()
+    if not any((seats or {}).values()) and not _on_boards(program, current):
+        # Пересчёт дня шахматки дорогой (календари всех инструкторов), а пациенту без
+        # индивидуальных, которого в шахматках нет, он ничего не меняет — таких большинство
+        # среди пересобираемых после правки тренажёров (FR-SCH-11a).
+        return
     for day in BoardDay.objects.filter(date__gte=current).values_list("date", flat=True):
         overrides = {program.pk: seats.get(day, [])} if seats is not None else None
         _recompute(day, [program], auto=day > current, seats=overrides)
+
+
+def _on_boards(program: Program, current: date) -> bool:
+    """Есть ли пациенту что делать в шахматках с ``current``: индивидуальные или Мото-Л
+    в назначениях, занятия или записи в блоках."""
+    return (
+        program.prescriptions.filter(
+            Q(procedure__kind=ProcedureKind.INDIVIDUAL) | Q(procedure__evening_individual=True)
+        ).exists()
+        or program.bookings.filter(kind=BookingKind.INDIVIDUAL, date__gte=current).exists()
+        or BoardPatient.objects.filter(program=program, date__gte=current).exists()
+    )
 
 
 def resync(programs: Iterable[Program], day: date) -> None:
@@ -159,7 +176,10 @@ def propagate(program: Program, day: date) -> None:
 
 def mark_edited(program: Program, day: date, *, unplaced: int = 0, cancelled: int = 0) -> None:
     """Пациента правили вручную в эту дату; изменить блоки на ``unplaced`` / ``cancelled``."""
-    entry, _ = BoardPatient.objects.get_or_create(date=day, program=program)
+    # Не get_or_create: новая запись сохранялась бы дважды — и дважды в журнал.
+    entry = BoardPatient.objects.filter(date=day, program=program).first() or BoardPatient(
+        date=day, program=program
+    )
     entry.unplaced = max(entry.unplaced + unplaced, 0)
     entry.cancelled = max(entry.cancelled + cancelled, 0)
     entry.edited = True

@@ -5,7 +5,9 @@
 <div id="board"{% if oob %} hx-swap-oob="true"{% endif %} data-live="board:{{ board.day|date:'Y-m-d' }}"
      {% if board.can_edit %}data-date="{{ board.day|date:'Y-m-d' }}" data-place-url="{% url 'scheduling:board_place' %}"
      data-move-url="{% url 'scheduling:board_move' 0 %}"
-     data-equipment-move-url="{% url 'scheduling:board_equipment_move' 0 %}"{% endif %}>
+     data-equipment-move-url="{% url 'scheduling:board_equipment_move' 0 %}"
+     data-equipment-place-url="{% url 'scheduling:board_equipment_place' %}"
+     data-equipment-hold-url="{% url 'scheduling:board_equipment_hold' %}"{% endif %}>
   {% if board.unplaced or board.cancelled %}
     <div class="row g-2 mb-2">
       {% for title, items, hint in board.hold_blocks %}
@@ -140,9 +142,9 @@
                              data-busy="{{ patient.busy }}" role="button" tabindex="0"
                              hx-get="{% url 'scheduling:board_equipment' patient.booking.pk %}"
                              hx-trigger="click, keyup[key=='Enter']" hx-target="#cell-panel" hx-swap="outerHTML"
-                             title="Перетащите на другое время этого тренажёра, щелчок — пометка">{{ patient.label }}</div>
+                             title="Перетащите на другое время этого тренажёра, щелчок — пометка">{% if patient.booking.pinned %}<i class="bi bi-pin-angle board-pin" title="Поставлен вручную — подбор не двигает"></i>{% endif %}{{ patient.label }}</div>
                       {% else %}
-                        <div>{{ patient.label }}</div>
+                        <div>{% if patient.program_id and patient.booking.pinned %}<i class="bi bi-pin-angle board-pin" title="Поставлен вручную — подбор не двигает"></i>{% endif %}{{ patient.label }}</div>
                       {% endif %}
                     {% endfor %}
                   </td>
@@ -150,6 +152,23 @@
               </tr>
             {% endfor %}
           </tbody>
+          {% if board.equipment_holds %}
+            {# Блоки тренажёров (FR-SCH-11a): у каждого тренажёра свои «Не распределены» и «Отменены». #}
+            <tfoot class="board-hold">
+              {% for block, title, hint in board.equipment_hold_rows %}
+                <tr>
+                  <th class="board-time small fw-semibold" title="{{ hint }}">{{ title }}</th>
+                  {% for hold in board.equipment_holds %}
+                    <td class="{% if block == 'unplaced' and hold.unplaced %}table-danger{% endif %}{% if board.can_edit %} board-equipment{% endif %}"
+                        {% if board.can_edit %}data-equipment-drop="{{ hold.equipment.pk }}" data-hold="{{ block }}"{% endif %}>
+                      {% if block == 'unplaced' %}{% with items=hold.unplaced %}{% include "scheduling/_board_equipment_hold.html" %}{% endwith %}
+                      {% else %}{% with items=hold.cancelled %}{% include "scheduling/_board_equipment_hold.html" %}{% endwith %}{% endif %}
+                    </td>
+                  {% endfor %}
+                </tr>
+              {% endfor %}
+            </tfoot>
+          {% endif %}
         </table>
       </div>
     {% endif %}

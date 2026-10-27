@@ -10,7 +10,7 @@
 """
 
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, time, timedelta
 
@@ -21,6 +21,7 @@ from django.db.models import F, Q
 from apps.accounts.access import departments_for, departments_with, has_right
 from apps.accounts.models import Right, User
 from apps.cards.xlsx.board import BoardCell, BoardSheet
+from apps.catalog.domain import add_minutes
 from apps.catalog.models import Equipment, GroupSession, InstructorSlot, ProcedureKind
 from apps.live import events as live
 from apps.live import topics as live_topics
@@ -32,7 +33,9 @@ from apps.staff.services import build_teams, instructor_calendars, teams_with
 
 from . import board_days, manual, staff_changes
 from .domain import is_weekend
-from .models import BoardDay, BoardPatient, Booking, BookingKind
+from .domain.validate import Violation, ViolationCode
+from .models import BoardDay, BoardPatient, Booking, BookingKind, RemovedKind, RemovedSession
+from .services import replan
 
 WEEKDAYS = ("Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье")
 
@@ -81,6 +84,8 @@ class Patient:
     booking: Booking | None = None
     # Другие занятия пациента в этот день — JSON для подсветки при переносе (FR-SCH-10a).
     busy: str = ""
+    # Назначение тренажёра — у пациента в блоках тренажёра (FR-SCH-11a).
+    prescription_id: int | None = None
 
 
 @dataclass
@@ -119,6 +124,15 @@ class EquipmentRow:
 
 
 @dataclass
+class EquipmentHold:
+    """Блоки тренажёра под его колонкой (FR-SCH-11a): пациенты с числом занятий."""
+
+    equipment: Equipment
+    unplaced: list[tuple[Patient, int]] = field(default_factory=list)
+    cancelled: list[tuple[Patient, int]] = field(default_factory=list)
+
+
+@dataclass
 class Board:
     day: date
     slots: list[InstructorSlot]
@@ -130,6 +144,19 @@ class Board:
     can_edit: bool
     unplaced: list[tuple[Patient, int]] = field(default_factory=list)
     cancelled: list[tuple[Patient, int]] = field(default_factory=list)
+    equipment_holds: list[EquipmentHold] = field(default_factory=list)
+
+    @property
+    def equipment_hold_rows(self) -> list[tuple[str, str, str]]:
+        """Строки блоков под тренажёрами (FR-SCH-11a): блок, название, подсказка."""
+        return [
+            (
+                UNPLACED,
+                "Не распр.",
+                "Не распределены: не хватило места или пациент занят во всё окно тренажёра.",
+            ),
+            (CANCELLED, "Отменены", "Сняты вручную с этой даты; подбор их сам не ставит."),
+        ]
 
     @property
     def is_weekend(self) -> bool:
@@ -258,6 +285,7 @@ def board(user: User | None, day: date) -> Board:
                 result.unplaced.append((patient, item.unplaced))
             if item.cancelled:
                 result.cancelled.append((patient, item.cancelled))
+        result.equipment_holds = equipment_holds(day, equipment, own)
         _fill_busy(result)
     return result
 
@@ -272,6 +300,7 @@ def _all_patients(result: Board) -> list[Patient]:
     ]
     on_equipment = [p for row in result.equipment_rows for _i, ps, _o in row.cells for p in ps]
     held = [p for p, _units in result.unplaced + result.cancelled]
+    held += [p for item in result.equipment_holds for p, _units in item.unplaced + item.cancelled]
     return seated + on_equipment + held
 
 
@@ -363,6 +392,57 @@ def _equipment_table(day: date, own: set[int]) -> tuple[list[Equipment], list[Eq
         for start in sorted(starts, key=lambda s: (s not in window, s))
     ]
     return equipment, rows
+
+
+def equipment_holds(day: date, equipment: list[Equipment], own: set[int]) -> list[EquipmentHold]:
+    """«Не распределены» и «Отменены» у каждого тренажёра на дату (FR-SCH-11a).
+
+    Считается при показе, а не хранится: назначено на дату минус поставлено и убрано.
+    «Отменены» и снятые в «Не распределены» — убранные в шахматке (``RemovedSession``),
+    остальное недостающее — кому подбор не нашёл места. Убранное на странице программы
+    не показывается: это решение человека, а не нехватка места."""
+    result = {item.pk: EquipmentHold(item) for item in equipment}
+    prescriptions = (
+        Prescription.objects.filter(
+            procedure__kind=ProcedureKind.EQUIPMENT,
+            procedure__equipment__in=equipment,
+            program__start_date__lt=day,
+            program__end_date__gt=day,
+        )
+        .filter(Q(start_date__isnull=True) | Q(start_date__lte=day))
+        .filter(Q(cancel_date__isnull=True) | Q(cancel_date__gt=day))
+        .select_related("procedure", "program__department")
+        .prefetch_related("program__withdrawals")
+    )
+    prescriptions = [p for p in prescriptions if p.program.is_therapy_day(day)]
+    ids = [p.pk for p in prescriptions]
+    placed = Counter(
+        Booking.objects.filter(
+            date=day, kind=BookingKind.EQUIPMENT, prescription__in=ids
+        ).values_list("prescription_id", flat=True)
+    )
+    removed: dict[tuple[int, str], int] = {
+        (item.prescription_id, item.kind): item.units
+        for item in RemovedSession.objects.filter(date=day, prescription__in=ids)
+    }
+    for prescription in sorted(
+        prescriptions, key=lambda p: (room_sort_key(p.program.room), p.program.pk)
+    ):
+        cancelled = removed.get((prescription.pk, RemovedKind.CANCELLED), 0)
+        missing = (
+            prescription.per_day
+            - placed[prescription.pk]
+            - removed.get((prescription.pk, RemovedKind.REMOVED), 0)
+            - cancelled
+        )
+        hold = result[prescription.procedure.equipment_id]
+        patient = _patient(prescription.program, own)
+        patient.prescription_id = prescription.pk
+        if missing > 0:
+            hold.unplaced.append((patient, missing))
+        if cancelled:
+            hold.cancelled.append((patient, cancelled))
+    return [result[item.pk] for item in equipment]
 
 
 def sheet(result: Board) -> BoardSheet:
@@ -580,20 +660,223 @@ def remove_patient(user: User, booking: Booking, version: int) -> None:
 
 
 def move_equipment(
-    user: User, booking: Booking, version: int, start: time, reason: str = ""
+    user: User,
+    booking: Booking,
+    version: int,
+    start: time,
+    reason: str = "",
+    confirmed: bool = False,
 ) -> manual.EditResult:
     """Перенести пациента на другое время того же тренажёра перетаскиванием (FR-SCH-10a).
 
-    Только эта дата: следующие дни правятся на странице программы. В одно время может стоять
-    несколько пациентов в пределах вместимости; сверх неё — с причиной, она видна пометкой."""
+    На эту дату и все следующие (FR-SCH-11a): дни, где пациент в это время занят или время
+    правили отдельно, не меняются и перечисляются. Сверх вместимости или вне окна — после
+    подтверждения, причина необязательна и становится пометкой (решение 85)."""
     _require_board(user)
     if booking.kind != BookingKind.EQUIPMENT:
         raise BoardError("Это не запись на тренажёр.")
     _require_patient(user, booking.program)
-    # Без ensure_boards: она берёт блокировку шахматок раньше программы (порядок — CLAUDE.md).
-    if not board_days.editable(booking.date):
-        raise BoardError("Править можно только сегодняшнее и завтрашнее расписание (по будням).")
-    return manual.edit_booking(user, booking, version, manual.Target(start=start), reason=reason)
+    _require_equipment_editable(booking.date)
+    return manual.edit_booking(
+        user,
+        booking,
+        version,
+        manual.Target(start=start),
+        scope=manual.FOLLOWING,
+        reason=reason,
+        strict=True,
+        confirmed=confirmed,
+    )
+
+
+# Блоки тренажёра (FR-SCH-11a): из какого блока тащат и куда.
+HOLD_KINDS = {UNPLACED: RemovedKind.HELD, CANCELLED: RemovedKind.CANCELLED}
+
+
+@dataclass
+class _Units:
+    """Занятия назначения в дату: в сетке, убранные по видам и недостающие."""
+
+    bookings: list[Booking]
+    removed: dict[str, int]
+    per_day: int
+
+    @property
+    def missing(self) -> int:
+        return self.per_day - len(self.bookings) - sum(self.removed.values())
+
+
+def _units(program: Program, prescription: Prescription, day: date) -> list[tuple[date, _Units]]:
+    """Дни курса с этой даты, где назначение действует, и что в каждом из них."""
+    bookings: dict[date, list[Booking]] = defaultdict(list)
+    for item in program.bookings.filter(prescription=prescription, date__gte=day).order_by("start"):
+        bookings[item.date].append(item)
+    removed: dict[date, dict[str, int]] = defaultdict(dict)
+    for item in RemovedSession.objects.filter(prescription=prescription, date__gte=day):
+        removed[item.date][item.kind] = item.units
+    return [
+        (d, _Units(bookings[d], removed[d], prescription.per_day))
+        for d in program.course_dates()
+        if d >= day and manual.is_active_on(prescription, program, d)
+    ]
+
+
+def _equipment_prescription(program: Program, prescription: Prescription) -> Prescription:
+    current = (
+        program.prescriptions.select_related("procedure__equipment")
+        .filter(pk=prescription.pk)
+        .first()
+    )
+    if current is None or current.procedure is None:
+        raise BoardError("Назначение уже удалено — обновите страницу.")
+    if current.procedure.kind != ProcedureKind.EQUIPMENT or current.procedure.equipment is None:
+        raise BoardError("Это не назначение тренажёра.")
+    return current
+
+
+@transaction.atomic
+def place_equipment(
+    user: User,
+    prescription: Prescription,
+    day: date,
+    start: time,
+    source: str,
+    reason: str = "",
+    confirmed: bool = False,
+) -> manual.EditResult:
+    """Поставить пациента из блока тренажёра на время (FR-SCH-11a): на эту дату и все
+    следующие дни курса, где его нет в сетке. Блок, из которого тащили, с этих дат снимается.
+
+    Эта дата должна пройти проверку, иначе ничего не меняется. Сверх вместимости — на все
+    дни после подтверждения, причина необязательна (решение 85). Следующие дни, где пациент
+    занят, пропускаются: там он остаётся в «Не распределены»."""
+    _require_board(user)
+    if source not in HOLD_KINDS:
+        raise BoardError("Неизвестный блок.")
+    program = manual.lock_program(prescription.program)
+    _require_patient(user, program)
+    _require_equipment_editable(day)
+    manual.lock_resources(program)
+    prescription = _equipment_prescription(program, prescription)
+    equipment = prescription.procedure.equipment
+    end = add_minutes(start, equipment.duration_min)
+    days = _units(program, prescription, day)
+    if not days or days[0][0] != day:
+        raise BoardError(f"{day:%d.%m} тренажёр у пациента не назначен.")
+    loaded = manual.load(program, [d for d, _u in days], equipment)
+    # Сначала снимаем блок, из которого тащили, затем — другой блок: «Отменены» с этой даты
+    # больше не действуют, раз пациента снова поставили.
+    kinds = [HOLD_KINDS[source]] + [k for k in HOLD_KINDS.values() if k != HOLD_KINDS[source]]
+    result = manual.EditResult()
+    plans: list[tuple[date, str | None, bool, bool]] = []
+    soft_all: list[tuple[date, Violation]] = []
+    for d, units in days:
+        first = d == day
+        kind = next((k for k in kinds if units.removed.get(k)), None)
+        if kind is None and units.missing <= 0:
+            if first:
+                raise BoardError("Пациент уже стоит на этом тренажёре в этот день.")
+            continue
+        violations = manual.check(
+            program, prescription, d, start, end, equipment=equipment, loaded=loaded
+        )
+        hard, soft = manual.split(violations)
+        full = any(v.code == ViolationCode.EQUIPMENT_FULL for v in soft)
+        if first and hard:
+            raise BoardError(" ".join(v.message for v in hard), hard)
+        if hard:
+            result.skipped.append((d, " ".join(v.message for v in hard)))
+            plans.append((d, kind, False, False))
+            continue
+        soft_all += [(d, v) for v in soft]
+        plans.append((d, kind, True, full))
+    if soft_all and not reason.strip() and not confirmed:
+        merged = manual.by_days(soft_all)
+        raise ConfirmationRequired(" ".join(v.message for v in merged), merged)
+    for d, kind, place, over in plans:
+        if kind is not None:
+            manual.undo_removal(user, prescription, d, kind)
+        if not place:
+            continue
+        booking = Booking(
+            program=program,
+            prescription=prescription,
+            procedure=prescription.procedure,
+            kind=BookingKind.EQUIPMENT,
+            date=d,
+            start=start,
+            end=end,
+            equipment=equipment,
+        )
+        if over and reason.strip():
+            # Причина сверх вместимости — пометкой (FR-CAT-4a): она видна в шахматке.
+            booking.note = reason.strip()[:100]
+        manual.save_manual(user, booking, reason)
+        result.changed.append(d)
+    replan(program)
+    return result
+
+
+@transaction.atomic
+def hold_equipment(
+    user: User,
+    target: str,
+    day: date,
+    *,
+    booking: Booking | None = None,
+    version: int | None = None,
+    prescription: Prescription | None = None,
+    source: str = "",
+) -> manual.EditResult:
+    """Снять тренажёр в блок «Не распределены» или «Отменены» с этой даты и на все
+    следующие дни курса (FR-SCH-11a): из сетки (``booking``) или из другого блока
+    (``prescription`` и ``source``). Подбор такого пациента сам не ставит — иначе он сразу
+    вернул бы его на освободившееся место."""
+    _require_board(user)
+    if target not in HOLD_KINDS or (booking is None and source not in HOLD_KINDS):
+        raise BoardError("Неизвестный блок.")
+    if booking is None and source == target:
+        raise BoardError("Пациент уже в этом блоке.")
+    program = manual.lock_program(booking.program if booking else prescription.program)
+    _require_patient(user, program)
+    if booking is not None:
+        booking = manual.fresh(program, booking, version or 0)
+        if booking.kind != BookingKind.EQUIPMENT:
+            raise BoardError("Это не запись на тренажёр.")
+        prescription, day = booking.prescription, booking.date
+    _require_equipment_editable(day)
+    manual.lock_resources(program)
+    prescription = _equipment_prescription(program, prescription)
+    kind = HOLD_KINDS[target]
+    other = next(k for k in HOLD_KINDS.values() if k != kind)
+    base = booking.start if booking is not None else None
+    result = manual.EditResult()
+    for d, units in _units(program, prescription, day):
+        if booking is not None and d == day:
+            taken = booking
+        elif booking is None and units.removed.get(other):
+            taken = other
+        elif units.missing > 0:
+            taken = None
+        elif units.bookings:
+            # Из сетки тащили занятие в это время — в следующие дни снимаем ближайшее к нему.
+            reference = manual.minutes(base) if base else 0
+            taken = min(units.bookings, key=lambda b: abs(manual.minutes(b.start) - reference))
+        elif units.removed.get(other):
+            taken = other
+        else:
+            continue
+        if isinstance(taken, Booking):
+            taken._history_user = user
+            taken.delete()
+        elif taken is not None:
+            manual.undo_removal(user, prescription, d, taken)
+        manual.add_removal(user, prescription, d, kind)
+        result.changed.append(d)
+    if day not in result.changed:
+        raise BoardError("Пациента уже нет там, откуда его тащили, — обновите страницу.")
+    replan(program)
+    return result
 
 
 @transaction.atomic
@@ -607,9 +890,7 @@ def set_equipment_note(user: User, booking: Booking, version: int, note: str) ->
     program = manual.lock_program(booking.program)
     _require_patient(user, program)
     booking = manual.fresh(program, booking, version)
-    # Без ensure_boards — как у move_equipment: порядок блокировок (CLAUDE.md).
-    if not board_days.editable(booking.date):
-        raise BoardError("Править можно только сегодняшнее и завтрашнее расписание (по будням).")
+    _require_equipment_editable(booking.date)
     booking.note = " ".join(note.split())[:100]
     booking.version += 1
     booking._history_user = user
@@ -619,6 +900,12 @@ def set_equipment_note(user: User, booking: Booking, version: int, note: str) ->
     later.filter(kind=BookingKind.EQUIPMENT).update(note=booking.note, version=F("version") + 1)
     live.publish(*(live_topics.board(day) for day in board_days.board_dates(board_days.today())))
     return booking
+
+
+def _require_equipment_editable(day: date) -> None:
+    # Без ensure_boards: она берёт блокировку шахматок раньше программы (порядок — CLAUDE.md).
+    if not board_days.editable(day):
+        raise BoardError("Править можно только сегодняшнее и завтрашнее расписание (по будням).")
 
 
 def _require_editable(day: date) -> None:

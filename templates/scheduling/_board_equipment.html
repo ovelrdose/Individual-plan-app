@@ -1,8 +1,8 @@
-{# Тренажёр в шахматке: перенос перетаскиванием (FR-SCH-10a) — ошибка или вопрос о причине #}
-{# сверх вместимости; note_form — панель по клику с пометкой (FR-SCH-10). #}
+{# Тренажёр в шахматке: перенос, постановка из блока и снятие в блок перетаскиванием (FR-SCH-10a, 11a) — ошибка или вопрос о причине. #}
+{# note_form — панель по клику с пометкой (FR-SCH-10). confirm_url и hidden — куда повторить действие с подтверждением. #}
 <div id="cell-panel" class="card shadow board-panel">
   <div class="card-header d-flex align-items-center gap-2 py-2">
-    <strong>{{ booking.equipment.name }}, {{ booking.date|date:"d.m" }}: {{ booking.program.room_label }} {{ booking.program.surname }}{% if start %} → {{ start|time:"G:i" }}{% else %}, {{ booking.start|time:"G:i" }}{% endif %}</strong>
+    <strong>{% if heading %}{{ heading }}{% else %}{{ booking.equipment.name }}, {{ booking.date|date:"d.m" }}: {{ booking.program.room_label }} {{ booking.program.surname }}, {{ booking.start|time:"G:i" }}{% endif %}</strong>
     <button type="button" class="btn-close ms-auto" aria-label="Закрыть"
             onclick="const p = this.closest('#cell-panel'); p.replaceChildren(); p.className = ''"></button>
   </div>
@@ -23,14 +23,13 @@
       <div class="alert alert-warning py-2">
         <ul class="mb-1 ps-3">{% for item in confirm %}<li>{{ item.message }}</li>{% endfor %}</ul>
       </div>
-      <form class="d-flex gap-1" hx-post="{% url 'scheduling:board_equipment_move' booking.pk %}"
-            hx-target="#cell-panel" hx-swap="outerHTML">
-        <input type="hidden" name="start" value="{{ start|time:'H:i' }}">
-        <input type="hidden" name="version" value="{{ version }}">
+      <form class="d-flex gap-1" hx-post="{{ confirm_url }}" hx-target="#cell-panel" hx-swap="outerHTML">
+        {% for name, value in hidden.items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+        <input type="hidden" name="confirmed" value="1">
         <label for="equipment-reason" class="visually-hidden">Причина</label>
-        <input id="equipment-reason" name="reason" class="form-control form-control-sm" maxlength="100" required
-               placeholder="Причина — будет видна пометкой в расписании">
-        <button type="submit" class="btn btn-sm btn-warning text-nowrap">Всё равно перенести</button>
+        <input id="equipment-reason" name="reason" class="form-control form-control-sm" maxlength="100"
+               placeholder="Причина, необязательно — станет пометкой">
+        <button type="submit" class="btn btn-sm btn-warning text-nowrap">Всё равно поставить</button>
       </form>
     {% endif %}
   </div>

@@ -31,8 +31,15 @@ from .domain.validate import (
     ViolationCode,
     validate,
 )
-from .models import GROUP_BOOKING_KINDS, Booking, BookingKind, BookingSource, RemovedSession
-from .services import replan
+from .models import (
+    GROUP_BOOKING_KINDS,
+    Booking,
+    BookingKind,
+    BookingSource,
+    RemovedKind,
+    RemovedSession,
+)
+from .services import lock_equipment, replan
 
 
 class EditError(Exception):
@@ -82,14 +89,7 @@ def lock_program(program: Program) -> Program:
 def lock_resources(program: Program) -> None:
     """Тренажёры программы и инструкторы — в том же порядке, что у подбора (программа уже
     заблокирована): иначе правка и параллельная пересборка ждали бы друг друга."""
-    equipment = sorted(
-        {
-            p.procedure.equipment_id
-            for p in program.prescriptions.select_related("procedure")
-            if p.procedure is not None and p.procedure.equipment_id is not None
-        }
-    )
-    list(Equipment.objects.select_for_update().filter(pk__in=equipment).order_by("pk"))
+    lock_equipment()
     list(Instructor.objects.select_for_update(of=("self",)).filter(is_active=True).order_by("pk"))
 
 
@@ -108,17 +108,25 @@ def fresh(program: Program, booking: Booking, version: int) -> Booking:
 # --- Убранные занятия -----------------------------------------------------------------------
 
 
-def add_removal(user: User, prescription: Prescription, day: date) -> None:
-    removal, created = RemovedSession.objects.get_or_create(prescription=prescription, date=day)
-    if not created:
+def add_removal(
+    user: User, prescription: Prescription, day: date, kind: str = RemovedKind.REMOVED
+) -> None:
+    # Не get_or_create: он сохраняет новую запись сам, без автора, и следующий save() писал
+    # бы в журнал вторую строку.
+    removal = RemovedSession.objects.filter(prescription=prescription, date=day, kind=kind).first()
+    if removal is None:
+        removal = RemovedSession(prescription=prescription, date=day, kind=kind)
+    else:
         removal.units += 1
     removal._history_user = user
     removal.save()
 
 
-def undo_removal(user: User, prescription: Prescription, day: date) -> bool:
+def undo_removal(
+    user: User, prescription: Prescription, day: date, kind: str = RemovedKind.REMOVED
+) -> bool:
     """Занятие снова ставят в дату, где его убирали: пометка «убрано» уменьшается."""
-    removal = RemovedSession.objects.filter(prescription=prescription, date=day).first()
+    removal = RemovedSession.objects.filter(prescription=prescription, date=day, kind=kind).first()
     if removal is None:
         return False
     removal._history_user = user
@@ -146,6 +154,31 @@ def is_active_on(prescription: Prescription, program: Program, day: date) -> boo
     )
 
 
+@dataclass(frozen=True)
+class Loaded:
+    """Занятия для ``check`` на несколько дней сразу."""
+
+    patient: dict[date, list[Booking]]
+    # Записи тренажёра ``equipment_id`` по (дата, начало) — pk, чтобы исключить переносимую.
+    equipment: dict[tuple[date, time], list[int]]
+    equipment_id: int | None
+    limit: int
+
+
+def load(program: Program, days: list[date], equipment: Equipment | None = None) -> Loaded:
+    """Занятия пациента и записи тренажёра на эти дни — двумя запросами на все дни."""
+    patient: dict[date, list[Booking]] = {}
+    for booking in program.bookings.filter(date__in=days).select_related("procedure"):
+        patient.setdefault(booking.date, []).append(booking)
+    taken: dict[tuple[date, time], list[int]] = {}
+    if equipment is not None:
+        for pk, day, start in Booking.objects.filter(
+            date__in=days, kind=BookingKind.EQUIPMENT, equipment=equipment
+        ).values_list("pk", "date", "start"):
+            taken.setdefault((day, start), []).append(pk)
+    return Loaded(patient, taken, equipment.pk if equipment else None, _individual_limit(program))
+
+
 def check(
     program: Program,
     prescription: Prescription,
@@ -157,13 +190,21 @@ def check(
     instructor: Instructor | None = None,
     slot: InstructorSlot | None = None,
     equipment: Equipment | None = None,
+    loaded: Loaded | None = None,
 ) -> list[Violation]:
-    """Нарушения кандидата: пациент, инструктор (для индивидуального), тренажёр."""
+    """Нарушения кандидата: пациент, инструктор (для индивидуального), тренажёр.
+
+    ``loaded`` — занятия, загруженные заранее на все проверяемые дни (``load``): правка
+    «эта и следующие» проверяет каждый день курса, и запросы на каждый день складываются."""
     if program.is_absent(day):
         raise EditError(f"Пациент выбыл — {day:%d.%m} у него нет занятий.")
-    others = program.bookings.filter(date=day).select_related("procedure")
-    if moved is not None and moved.pk:
-        others = others.exclude(pk=moved.pk)
+    moved_pk = moved.pk if moved is not None and moved.pk else None
+    if loaded is not None:
+        others = [b for b in loaded.patient.get(day, []) if b.pk != moved_pk]
+    else:
+        others = program.bookings.filter(date=day).select_related("procedure")
+        if moved_pk:
+            others = others.exclude(pk=moved_pk)
     individual = prescription.procedure.kind == ProcedureKind.INDIVIDUAL
     context = Context(
         patient=tuple(
@@ -176,7 +217,7 @@ def check(
             for b in others
         ),
         in_course=is_active_on(prescription, program, day),
-        individual_limit=_individual_limit(program),
+        individual_limit=loaded.limit if loaded is not None else _individual_limit(program),
     )
     if individual and instructor is not None and slot is not None:
         calendar = instructor_calendars([instructor], day, day)[instructor.pk].day(day)
@@ -188,13 +229,16 @@ def check(
             instructor_busy=busy.text if busy else "",
         )
     if equipment is not None:
-        taken = (
-            Booking.objects.filter(
-                date=day, kind=BookingKind.EQUIPMENT, equipment=equipment, start=start
+        if loaded is not None and loaded.equipment_id == equipment.pk:
+            taken = sum(1 for pk in loaded.equipment.get((day, start), []) if pk != moved_pk)
+        else:
+            taken = (
+                Booking.objects.filter(
+                    date=day, kind=BookingKind.EQUIPMENT, equipment=equipment, start=start
+                )
+                .exclude(pk=moved_pk)
+                .count()
             )
-            .exclude(pk=moved.pk if moved is not None and moved.pk else None)
-            .count()
-        )
         context = _replace(
             context,
             equipment_starts=tuple(minutes(t) for t in equipment.start_times()),
@@ -222,6 +266,21 @@ def _individual_limit(program: Program) -> int:
         if item.procedure is not None and item.procedure.kind == ProcedureKind.INDIVIDUAL
     )
     return min(per_day, program.department.max_individual_per_day)
+
+
+def by_days(found: list[tuple[date, Violation]]) -> list[Violation]:
+    """Одинаковые нарушения разных дней — одной строкой с датами: правка «эта и следующие»
+    иначе выводила бы в панели по строке на каждый день курса."""
+    groups: dict[str, list[tuple[date, Violation]]] = {}
+    for day, violation in found:
+        groups.setdefault(violation.code, []).append((day, violation))
+    return [
+        Violation(
+            code,
+            f"{items[0][1].message.rstrip('.')} ({', '.join(f'{d:%d.%m}' for d, _v in items)}).",
+        )
+        for code, items in groups.items()
+    ]
 
 
 def split(violations: list[Violation]) -> tuple[list[Violation], list[Violation]]:
@@ -267,24 +326,34 @@ def edit_booking(
     *,
     scope: str = ONE,
     reason: str = "",
+    strict: bool = False,
+    confirmed: bool = False,
 ) -> EditResult:
     """Изменить занятие на эту дату или «эту и все следующие» (FR-SCH-9).
 
     Эта дата должна пройти проверку — иначе ничего не сохраняется. Следующие даты, где
     вариант невозможен (инструктор не работает, время занято), пропускаются и
-    перечисляются. Нарушения «с подтверждением» сохраняются только с причиной."""
+    перечисляются. Нарушения «с подтверждением» сохраняются только с причиной или с
+    ``confirmed`` — подтверждением без причины (шахматка, решение 85).
+
+    ``strict`` — правка из шахматки (FR-SCH-11a): дни, где время правили отдельно (закреплено
+    другое), не трогаются. Сверх вместимости ставится на все дни (решение 85)."""
     _require_not_individual(booking)
     program = lock_program(booking.program)
     require_edit(user, program)
     booking = fresh(program, booking, version)
     lock_resources(program)
     items = [booking] + (_following(program, booking) if scope == FOLLOWING else [])
+    loaded = load(program, [item.date for item in items], booking.equipment)
     plans: list[tuple[Booking, Callable[[], None], bool]] = []
     result = EditResult()
-    soft_all: list[Violation] = []
+    soft_all: list[tuple[date, Violation]] = []
     for index, item in enumerate(items):
+        if strict and index and item.pinned and item.start != booking.start:
+            result.skipped.append((item.date, f"время правили отдельно — {item.start:%-H:%M}"))
+            continue
         try:
-            apply, violations = _plan(program, item, target)
+            apply, violations = _plan(program, item, target, loaded)
         except EditError as error:
             if index == 0:
                 raise
@@ -296,14 +365,15 @@ def edit_booking(
                 raise EditError(" ".join(v.message for v in hard), hard)
             result.skipped.append((item.date, " ".join(v.message for v in hard)))
             continue
-        soft_all += [Violation(v.code, f"{item.date:%d.%m}: {v.message}") for v in soft]
+        soft_all += [(item.date, v) for v in soft]
         over = any(v.code == ViolationCode.EQUIPMENT_FULL for v in soft)
         plans.append((item, apply, over))
-    if soft_all and not reason.strip():
-        raise ConfirmationRequired(" ".join(v.message for v in soft_all), soft_all)
+    if soft_all and not reason.strip() and not confirmed:
+        merged = by_days(soft_all)
+        raise ConfirmationRequired(" ".join(v.message for v in merged), merged)
     for item, apply, over in plans:
         apply()
-        if over:
+        if over and reason.strip():
             # Сверх вместимости — только с пометкой (FR-CAT-4a): она видна в шахматке.
             item.note = reason.strip()[:100]
         save_manual(user, item, reason)
@@ -314,9 +384,11 @@ def edit_booking(
 
 def _following(program: Program, booking: Booking) -> list[Booking]:
     """То же занятие в следующие даты: того же назначения, ближайшее по времени к этому."""
-    later = program.bookings.filter(
-        prescription=booking.prescription, date__gt=booking.date
-    ).order_by("date", "start")
+    later = (
+        program.bookings.filter(prescription=booking.prescription, date__gt=booking.date)
+        .select_related("prescription__procedure", "procedure", "equipment")
+        .order_by("date", "start")
+    )
     by_day: dict[date, list[Booking]] = {}
     for item in later:
         by_day.setdefault(item.date, []).append(item)
@@ -328,7 +400,7 @@ def _following(program: Program, booking: Booking) -> list[Booking]:
 
 
 def _plan(
-    program: Program, booking: Booking, target: Target
+    program: Program, booking: Booking, target: Target, loaded: Loaded | None = None
 ) -> tuple[Callable[[], None], list[Violation]]:
     """Новое положение занятия в его дату и нарушения. Изменения — в apply()."""
     kind = booking.kind
@@ -344,6 +416,7 @@ def _plan(
             session.start_time,
             session.end_time,
             moved=booking,
+            loaded=loaded,
         )
 
         def apply() -> None:
@@ -364,6 +437,7 @@ def _plan(
             end,
             moved=booking,
             equipment=equipment,
+            loaded=loaded,
         )
 
         def apply() -> None:

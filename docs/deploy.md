@@ -166,6 +166,7 @@ sudo -u omr4 nano /opt/omr4/app/.env
 | `PUBLIC_BOARD_NETWORKS` | Сети клиники для `/board/`, например `10.0.0.0/8` |
 | `BEHIND_PROXY` | `true` — сервис за nginx |
 | `SECURE_HSTS_SECONDS` | `0`, пока сертификат самоподписанный |
+| `DB_POOL_MAX_SIZE` | Не задавать (по умолчанию `10`): пул соединений с базой на процесс gunicorn, всего не больше 3 × 10 при `max_connections = 100`. Соединение проверяется перед выдачей, поэтому после перезапуска PostgreSQL перезапускать `omr4` не нужно. `0` — без пула |
 
 Проверка:
 
@@ -408,6 +409,7 @@ sudo systemctl start omr4
 
 - Сервер ставился до поддержки `.doc` (16.10.2026) — один раз доустановите LibreOffice: `sudo apt install -y --no-install-recommends libreoffice-writer-nogui`. Проверка: `soffice --version`.
 - Версия со справочниками в вебе (решение 83, 26.10.2026): миграция `accounts.0004` снимает «Статус персонала» у всех, кроме суперпользователей. Админка Django после неё открывается только суперпользователю (`admin`), остальные ведут справочники на экранах «Справочники», «Групповые занятия», «Пользователи».
+- Версия с блоками тренажёров и пулом соединений (решения 84, 85, 27.10.2026): новый пакет `psycopg-pool` — `pip install -r requirements.txt` обязателен, без него сервис не запустится («Error loading psycopg_pool module»). Миграция `scheduling.0010`. В `.env` ничего добавлять не нужно (`DB_POOL_MAX_SIZE` по умолчанию 10). Проверка пула: `sudo -u postgres psql -c "SELECT state, count(*) FROM pg_stat_activity WHERE usename='omr4' GROUP BY state;"` — в покое около 6 `idle`.
 
 ## Без интернета
 
