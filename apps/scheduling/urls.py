@@ -22,6 +22,7 @@ urlpatterns = [
     path("board/duty/end/", views.board_duty_end, name="board_duty_end"),
     path("board/off/", views.board_off, name="board_off"),
     path("board/export/", views.board_export, name="board_export"),
+    path("board/journal/", views.journal_view, name="journal"),
     path("load/", views.load, name="load"),
     path("booking/<int:pk>/", views.booking_panel, name="booking_panel"),
     path("booking/<int:pk>/edit/", views.booking_edit, name="booking_edit"),

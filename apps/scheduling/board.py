@@ -31,7 +31,7 @@ from apps.staff import domain as staff_domain
 from apps.staff.models import BlockKind, Instructor, InstructorBlock, InstructorDuty
 from apps.staff.services import build_teams, instructor_calendars, teams_with
 
-from . import board_days, manual, staff_changes
+from . import board_days, journal, manual, staff_changes
 from .domain import is_weekend
 from .domain.validate import Violation, ViolationCode
 from .models import BoardDay, BoardPatient, Booking, BookingKind, RemovedKind, RemovedSession
@@ -566,6 +566,7 @@ def free_seats(
 
 
 @transaction.atomic
+@journal.logged("Поставлен в ячейку расписания")
 def place_patient(
     user: User, program: Program, instructor: Instructor, slot: InstructorSlot, day: date
 ) -> Booking:
@@ -608,6 +609,7 @@ def place_patient(
 
 
 @transaction.atomic
+@journal.logged("Перенос в расписании")
 def move_patient(
     user: User, booking: Booking, version: int, instructor: Instructor, slot: InstructorSlot
 ) -> Booking:
@@ -624,6 +626,7 @@ def move_patient(
 
 
 @transaction.atomic
+@journal.logged("Пометка в ячейке расписания")
 def set_note(user: User, booking: Booking, version: int, note: str) -> Booking:
     """Пометка в ячейке: «Мото-Л», «art», «(шар)» (FR-SCH-10). Переходит на завтра вместе с
     пациентом."""
@@ -641,6 +644,7 @@ def set_note(user: User, booking: Booking, version: int, note: str) -> Booking:
 
 
 @transaction.atomic
+@journal.logged("Убран в «Отменены»")
 def remove_patient(user: User, booking: Booking, version: int) -> None:
     """Убрать пациента из сетки: он уходит в «Отменены» и остаётся там на следующие дни,
     пока лечится (FR-SCH-11). Вернуть — поставить в любую ячейку."""
@@ -659,6 +663,7 @@ def remove_patient(user: User, booking: Booking, version: int) -> None:
 # --- Правка: тренажёры ----------------------------------------------------------------------
 
 
+@journal.logged("Перенос на тренажёре в расписании")
 def move_equipment(
     user: User,
     booking: Booking,
@@ -735,6 +740,7 @@ def _equipment_prescription(program: Program, prescription: Prescription) -> Pre
 
 
 @transaction.atomic
+@journal.logged("Постановка на тренажёр из блока")
 def place_equipment(
     user: User,
     prescription: Prescription,
@@ -793,6 +799,7 @@ def place_equipment(
     if soft_all and not reason.strip() and not confirmed:
         merged = manual.by_days(soft_all)
         raise ConfirmationRequired(" ".join(v.message for v in merged), merged)
+    manual.journal_reason(program, soft_all, reason)
     for d, kind, place, over in plans:
         if kind is not None:
             manual.undo_removal(user, prescription, d, kind)
@@ -818,6 +825,7 @@ def place_equipment(
 
 
 @transaction.atomic
+@journal.logged("Снятие с тренажёра в блок")
 def hold_equipment(
     user: User,
     target: str,
@@ -1308,7 +1316,7 @@ def _check_in_shift(
     if rule is None:
         raise BoardError(
             f"{instructor.short_name}: на {day:%d.%m.%Y} нет шаблона смены — "
-            "задайте его на экране «Смены»."
+            "задайте его в карточке инструктора («Инструкторы» → «Состав и смены»)."
         )
     start, end = (f"{t.hour}:{t:%M}" for t in staff_domain.shift_hours(rule.pattern))
     for item in _covered(slot, session):

@@ -53,8 +53,11 @@ class _State:
     def __init__(self, snapshot: Snapshot):
         self.proposal = Proposal()
         self.busy: dict[date, list[tuple[int, int]]] = defaultdict(list)
+        # Названия занятий ``busy`` в том же порядке — для пояснений журнала.
+        self.labels: dict[date, list[str]] = defaultdict(list)
         for item in snapshot.patient_busy:
             self.busy[item.date].append((item.start, item.end))
+            self.labels[item.date].append(item.label)
         self.load: dict[tuple[int, date], list[tuple[int, int]]] = defaultdict(list)
         for item in snapshot.equipment_load:
             self.load[(item.equipment_id, item.date)].append((item.start, item.end))
@@ -190,22 +193,42 @@ class _State:
                 key=lambda o: (-coverage[o], *avoid(o), load(o), o.start, o.session_id or 0),
             )
 
+        explain = need.kind == Kind.EQUIPMENT
+        if explain:
+            if preferred is not None:
+                main = f"основное время {hhmm(best.start)} выбрано вручную"
+            else:
+                main = (
+                    f"основное время {hhmm(best.start)} — подходит в {coverage[best]} "
+                    f"из {len(dates)} дн., из таких самое свободное и раннее"
+                )
         deviations: dict[int, list[date]] = defaultdict(list)
         missing: list[date] = []
         for day in dates:
             if fits(day, best):
                 self._put(need, day, best)
+                if explain:
+                    self._reason(need, day, main)
                 continue
             # Замена на день: свободное время с наименьшей загрузкой, поближе к основному.
             candidates = [o for o in options if fits(day, o)]
             if not candidates:
                 missing.append(day)
+                if explain:
+                    self._reason(need, day, f"не поставлен: {self._why_none(need, day, options)}")
                 continue
             alternative = min(
                 candidates, key=lambda o: (load(o), abs(o.start - best.start), o.start)
             )
             self._put(need, day, alternative)
             deviations[alternative.start].append(day)
+            if explain:
+                self._reason(
+                    need,
+                    day,
+                    f"в основное время {hhmm(best.start)} {self._why_not(need, day, best)} — "
+                    f"замена {hhmm(alternative.start)} (свободное, ближе к основному)",
+                )
 
         for start, days in sorted(deviations.items()):
             self._issue(
@@ -217,11 +240,38 @@ class _State:
             self._issue(unplaced, need, f"{_days(missing)} — нет свободного времени, не поставлено")
         return best
 
+    def _reason(self, need: Need, day: date, text: str) -> None:
+        key = (need.prescription_id, day)
+        current = self.proposal.reasons.get(key)
+        # «2 р/д» — пояснения обоих занятий дня через «;».
+        self.proposal.reasons[key] = f"{current}; {text}" if current else text
+
+    def _why_not(self, need: Need, day: date, option: _Option) -> str:
+        """Почему время не подходит в этот день: занятие пациента или нет мест."""
+        for (start, end), label in zip(self.busy[day], self.labels[day], strict=False):
+            if start < option.end and option.start < end:
+                return f"пациент занят: {label or 'другое занятие'}"
+        if need.equipment_id is not None:
+            return f"мест нет ({self._used(need, day, option)} из {need.capacity})"
+        return "не подходит"
+
+    def _why_none(self, need: Need, day: date, options: list[_Option]) -> str:
+        """Почему не подошло ни одно время окна — по причинам, с временами."""
+        groups: dict[str, list[str]] = defaultdict(list)
+        for option in options:
+            groups[self._why_not(need, day, option)].append(hhmm(option.start))
+        parts = []
+        for why, times in groups.items():
+            shown = ", ".join(times) if len(times) <= 3 else f"{times[0]}–{times[-1]}"
+            parts.append(f"{shown} — {why}")
+        return "; ".join(parts)
+
     def _patient_free(self, day: date, option: _Option) -> bool:
         return all(end <= option.start or option.end <= start for start, end in self.busy[day])
 
     def _put(self, need: Need, day: date, option: _Option) -> None:
         self.busy[day].append((option.start, option.end))
+        self.labels[day].append(f"{need.label} {hhmm(option.start)}")
         if need.equipment_id is not None:
             self.load[(need.equipment_id, day)].append((option.start, option.end))
         self.proposal.placements.append(

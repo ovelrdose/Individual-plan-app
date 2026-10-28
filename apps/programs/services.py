@@ -13,7 +13,7 @@ from apps.accounts.access import departments_for, doctors_for, has_right, requir
 from apps.accounts.models import Right, User
 from apps.catalog.models import SCHEDULED_KINDS, ProcedureKind
 from apps.org.models import Department
-from apps.scheduling import board_days
+from apps.scheduling import board_days, journal
 from apps.scheduling.models import BoardPatient
 from apps.scheduling.services import replan
 
@@ -170,6 +170,7 @@ def review_items(program: Program) -> list[str]:
 
 
 @transaction.atomic
+@journal.logged("Изменена программа пациента (курс, ШРМ, даты)")
 def save_program(user: User, program: Program, *, end_date_changed: bool) -> Program:
     """Создаёт или сохраняет программу.
 
@@ -237,6 +238,7 @@ EDITABLE_FIELDS = [
 
 
 @transaction.atomic
+@journal.logged("Добавлено назначение")
 def add_prescription(user: User, prescription: Prescription) -> Prescription:
     """Новое назначение встаёт в конец списка — порядок строк в карте = порядок назначений."""
     require_editable(user, _lock(prescription.program))
@@ -251,6 +253,7 @@ def add_prescription(user: User, prescription: Prescription) -> Prescription:
 
 
 @transaction.atomic
+@journal.logged("Изменено назначение")
 def update_prescription(user: User, prescription: Prescription) -> Prescription:
     """Сохраняет только редактируемые поля: порядок строк меняет move_prescription."""
     program = _lock(prescription.program)
@@ -271,6 +274,7 @@ def update_prescription(user: User, prescription: Prescription) -> Prescription:
 
 
 @transaction.atomic
+@journal.logged("Удалено назначение")
 def delete_prescription(user: User, prescription: Prescription) -> None:
     program = _lock(prescription.program)
     require_editable(user, program)
@@ -397,6 +401,7 @@ def copy_plan(user: User, program: Program, source: Program) -> None:
 
 
 @transaction.atomic
+@journal.logged("Связан прошлый курс")
 def link_previous(user: User, program: Program, previous: Program, *, copy: bool) -> None:
     """Связать новую программу с прошлым курсом; ``copy`` — взять его план (FR-PRG-10)."""
     program = _lock(program)
@@ -426,6 +431,7 @@ def _require_withdraw(user: User, program: Program) -> None:
 
 
 @transaction.atomic
+@journal.logged("Выбытие пациента")
 def withdraw(user: User, program: Program, day: date, reason: str, note: str = "") -> Withdrawal:
     """Пациент выбыл с ``day`` (первый день без занятий). Занятия с этой даты удаляются,
     пациент уходит из шахматок и их блоков; прошедшие дни до ``day`` не меняются."""
@@ -450,6 +456,7 @@ def withdraw(user: User, program: Program, day: date, reason: str, note: str = "
 
 
 @transaction.atomic
+@journal.logged("Пациент вернулся после выбытия")
 def restore(user: User, program: Program, today: date | None = None) -> None:
     """Вернуть выбывшего, пока не прошла плановая дата окончания. Он снова лечится с
     сегодняшнего дня: дни отсутствия остаются без занятий, группы и тренажёры подбираются
@@ -482,12 +489,15 @@ def _save(instance: Program | Prescription, user: User, **kwargs) -> None:
 
 
 def _lock(program: Program) -> Program:
-    """Блокируем программу: правки одной программы идут по очереди."""
-    return (
+    """Блокируем программу: правки одной программы идут по очереди. Состояние расписания до
+    правки запоминается для журнала (FR-SCH-19)."""
+    locked = (
         Program.objects.select_for_update(of=("self",))
         .select_related("department")
         .get(pk=program.pk)
     )
+    journal.watch([locked.pk])
+    return locked
 
 
 def _require_exists(program: Program, prescription: Prescription) -> None:

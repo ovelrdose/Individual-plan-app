@@ -57,7 +57,7 @@ apps/
     models.py            Equipment, Section, Procedure, GroupSession, InstructorSlot
     domain.py            время, шаги окна тренажёра, нормализация названий — без Django
     services.py          «Справочники»: процедуры (поиск, создание, правка, архив); load_initial_catalog
-    views.py, forms.py   экран «Справочники»: процедуры, инструкторы, сетка слотов, журнал выгрузок
+    views.py, forms.py   экран «Справочники»: процедуры, сетка слотов, журнал выгрузок
     initial_data.py, schedule_file.py  разбор lfk.xlsx / basseyn.xlsx / Gruppy_DS.xlsx
   staff/                 инструкторы
     models.py            Instructor (partner — пара 2/2), ShiftPattern, ShiftException,
@@ -65,7 +65,7 @@ apps/
     domain.py            кто работает в дату и что у него в слоте (InstructorCalendar) — без Django
     services.py          instructor_calendars (вход для подбора и шахматки), build_teams/teams_with,
                          смены, распорядок, пары
-    views.py             экраны «Смены», «Распорядок»
+    views.py             раздел «Инструкторы»: «Состав и смены» (карточка в окне), «Распорядок»
     management/commands/ load_board_instructors (настоящие инструкторы из instructions_schedule.xlsx)
   programs/              программы и назначения
     models.py            Program, Withdrawal, Prescription
@@ -79,14 +79,17 @@ apps/
       board_day.py         plan_day — раскладка индивидуальных на один будний день
       typical_day.py       типичный день и раскладка по сетке слотов (для экрана и карты)
       validate.py          единый валидатор занятия для ручной правки
-    models.py            Booking (занятие), BoardDay, BoardPatient, RemovedSession
+      journal.py           changes — что изменилось у пациента («было → стало» по датам)
+    models.py            Booking (занятие), BoardDay, BoardPatient, RemovedSession, ScheduleEvent
     services.py          replan (пересборка программы), program_schedule (типичный день, календарь),
                          время групп, «Групповые занятия» (разделы, группы, времена, тренажёры)
     board_days.py        шахматки по дням: ensure_boards, create_board, sync_program, propagate, lock
     board.py             экран шахматки: просмотр, place/move/remove, пометки, блоки, распорядок
     manual.py            правка групп и тренажёров на странице программы (эта / эта и следующие)
     staff_changes.py     после изменения смены/распорядка и архива инструктора → «Не распределены»
-    reports.py           «Загрузка инструкторов»
+    reports.py           «Загрузка» (вкладка раздела «Инструкторы»)
+    journal.py           журнал расписания: action/logged (кто и что), watch (состояние до),
+                         explain (почему), запись при выходе из действия, экран и история
     management/commands/ load_current_patients (текущие пациенты по сводкам постов)
   exchange/              импорт
     prescription_sheet.py  разбор листа назначений (.docx) — без Django
@@ -192,6 +195,7 @@ templates (HTMX)  →  views.py (тонкие)  →  services.py (права + �
 | `BoardDay` | `date` (уникально) | Шахматка на этот день составлена |
 | `BoardPatient` | `date`, `program`, `unplaced` («Не распределены»), `cancelled` («Отменены»), `edited` (правили вручную) | Блоки под сеткой шахматки |
 | `RemovedSession` | `prescription`, `date`, `kind` (`RemovedKind`: убрано на странице программы / `held` — тренажёр снят в «Не распределены» / `cancelled` — в «Отменены»), `units` | Занятие убрали вручную — подбор его не вернёт. Уникально по `(prescription, date, kind)` |
+| `ScheduleEvent` | `created_at`, `program`, `subject` («Индивидуальные» / тренажёр), `equipment`, `date_from…date_to`, `before`, `after`, `source` (система / вручную), `user`, `action`, `reason` | Журнал расписания (FR-SCH-19, решение 86): только изменения, неделя (`journal.purge` при составлении шахматки). Без `simple_history` — сам журнал |
 
 `pinned` — занятие закреплено вручную, подбор его не трогает. `version` — оптимистичная блокировка: правка с устаревшей версией отклоняется («Запись изменена другим пользователем»).
 
@@ -280,6 +284,14 @@ replan(program):
 После пересборки `replan(program)` вызывает `refill_equipment` для тренажёров программы: если с завтрашнего дня на тренажёре есть свободное время (`_free_equipment_slots` — пары тренажёр × дата), программы с конфликтом `EQUIPMENT_UNPLACED` (отбираются в SQL по `schedule_issues`; нет ждущих — сразу выход) пересобираются по очереди поступления с `refill=False, keep_today=True` — только те, у кого свободная пара совпадает с днём без тренажёра (`_missing_equipment`), и только пока свободное время остаётся: пересборка дорогая, а место после правки обычно одно — сегодняшние тренажёры не меняются, на сегодня ждущих ставит специалист (FR-SCH-11a). Ждущих блокируют с `skip_locked`: программу, которую правит другой запрос, он пересоберёт сам. `_replan_current` идёт по программам тоже по очереди поступления с `refill=False` и добирает ждущих один раз в конце; `replan_for_equipment` пересобирает все программы тренажёра и `refill` не зовёт.
 
 Групповые правки (`replan_for_group`, `replan_for_equipment`) пересобирают все текущие программы с этой группой или тренажёром; итог для экрана — `Rescheduled` (у кого что изменилось, кто ушёл в «Не распределены»). `watch_displaced` — общий механизм «снимок шахматок до и после», чтобы назвать вытесненные индивидуальные.
+
+### 7.3a. Журнал расписания (`journal.py`, FR-SCH-19)
+
+Записи не пишутся в местах изменений — их слишком много. Действие открывает `journal.action(текст, user)` (у сервисов с пользователем первым аргументом — декоратор `@journal.logged("…")` под `@transaction.atomic`); всё, что меняет пациента, сначала зовёт `journal.watch(programs)` — запоминается его состояние: индивидуальные в составленных шахматках с сегодня и тренажёры с сегодня до конца курса (строки «Волков 9:10, Не распределены», «13:00», «Отменён»). Точки `watch`: `manual.lock_program` (вся ручная правка), `programs.services._lock`, `services._replan`, `board_days._recompute`. При выходе из внешнего действия состояние сравнивается (`domain/journal.changes`): подряд идущие даты с одинаковым «было → стало» — одна запись; новая шахматка сравнивается с днём-источником (`journal.new_board`).
+
+- Пациент относится к действию, в котором его впервые тронули: правка специалиста — от него, ждущий из `refill_equipment` — от системы. `replan` открывает действие только запасное (`fallback`), вложенные действия того же пользователя поглощаются внешним.
+- Причины: `board_day.plan_day` возвращает `PatientDay.why` (перенос, напарник, кто не работает, чем занят пациент — `Patient.busy_labels`, почему эта ячейка, что мешало), `engine.propose` — `Proposal.reasons[(назначение, дата)]` (основное время, замена, почему не поставлен; `Busy.label`). Их передают `journal.explain`; подтверждённые нарушения и причина специалиста — `journal.note` (`manual.journal_reason`).
+- Новый код, который меняет занятия или блоки шахматки, должен звать `watch` до изменения — иначе изменение в журнал не попадёт.
 
 ### 7.4. Движок подбора (`domain/engine.py`)
 
@@ -462,6 +474,7 @@ cards.services.export_card(user, program)
 |---|---|
 | Строка листа распознаётся неверно | `exchange/prescription_sheet.py` (разбор ячейки), `exchange/matching.py` (сопоставление), синонимы процедуры |
 | Группа встала не в то время | `scheduling/domain/engine.py`, `services.replan` (`_need`), `Prescription.group_session` |
+| Почему пациент встал туда / кто его переставил | экран «Журнал» (`journal.entries`), `journal.watch`/`explain`, `PatientDay.why`, `Proposal.reasons` |
 | Пациент не попал в шахматку / ушёл в «Не распределены» | `board_days.sync_program`, `domain/board_day.plan_day`, `staff_changes.rebuild`, календарь инструктора (`staff/domain.py`) |
 | Тренажёр в «Не распределены» / «Отменены», ждущий не встал на свободное место | `board.equipment_holds`, `board.place_equipment` / `hold_equipment`, `services.refill_equipment`, `RemovedSession.kind` |
 | Что и где печатается в карте | `cards/services.build_card_data`, `scheduling/services.program_schedule`, `domain/typical_day.py`, `cards/xlsx/writer.py`, `mapping.json` |

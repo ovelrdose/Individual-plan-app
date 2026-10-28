@@ -19,5 +19,6 @@
       <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-person-plus"></i> Поставить</button>
     </form>
     <div class="form-text">Или перетащите пациента из блока в нужную ячейку расписания.</div>
+    {% include "scheduling/_journal_history.html" with program=candidate.program %}
   </div>
 </div>

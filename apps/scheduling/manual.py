@@ -22,6 +22,7 @@ from apps.programs.models import Prescription, Program
 from apps.staff.models import Instructor
 from apps.staff.services import instructor_calendars
 
+from . import journal
 from .domain.validate import (
     Candidate,
     Context,
@@ -79,11 +80,14 @@ def require_edit(user: User, program: Program) -> None:
 
 
 def lock_program(program: Program) -> Program:
-    return (
+    locked = (
         Program.objects.select_for_update(of=("self",))
         .select_related("department")
         .get(pk=program.pk)
     )
+    # Все ручные правки начинаются здесь — состояние до правки для журнала (FR-SCH-19).
+    journal.watch([locked.pk])
+    return locked
 
 
 def lock_resources(program: Program) -> None:
@@ -268,6 +272,14 @@ def _individual_limit(program: Program) -> int:
     return min(per_day, program.department.max_individual_per_day)
 
 
+def journal_reason(program: Program, soft: list[tuple[date, Violation]], reason: str) -> None:
+    """Подтверждённые нарушения и причина специалиста — в журнал расписания (FR-SCH-19)."""
+    if soft:
+        journal.note(program.pk, "подтверждено: " + "; ".join(v.message for v in by_days(soft)))
+    if reason.strip():
+        journal.note(program.pk, f"причина: {reason.strip()}")
+
+
 def by_days(found: list[tuple[date, Violation]]) -> list[Violation]:
     """Одинаковые нарушения разных дней — одной строкой с датами: правка «эта и следующие»
     иначе выводила бы в панели по строке на каждый день курса."""
@@ -318,6 +330,7 @@ class Target:
 
 
 @transaction.atomic
+@journal.logged("Правка занятия на странице программы")
 def edit_booking(
     user: User,
     booking: Booking,
@@ -371,6 +384,7 @@ def edit_booking(
     if soft_all and not reason.strip() and not confirmed:
         merged = by_days(soft_all)
         raise ConfirmationRequired(" ".join(v.message for v in merged), merged)
+    journal_reason(program, soft_all, reason)
     for item, apply, over in plans:
         apply()
         if over and reason.strip():
@@ -453,6 +467,7 @@ def _require_not_individual(booking: Booking) -> None:
 
 
 @transaction.atomic
+@journal.logged("Занятие убрано на странице программы")
 def remove_booking(user: User, booking: Booking, version: int, *, scope: str = ONE) -> EditResult:
     """Убрать занятие на дату или «эту и все следующие»: подбор его не вернёт."""
     _require_not_individual(booking)
@@ -471,6 +486,7 @@ def remove_booking(user: User, booking: Booking, version: int, *, scope: str = O
 
 
 @transaction.atomic
+@journal.logged("Занятие возвращено на странице программы")
 def restore_date(user: User, prescription: Prescription, day: date) -> None:
     """«Вернуть занятие»: снять пометку «убрано» на дату — подбор поставит его снова."""
     program = lock_program(prescription.program)
@@ -481,6 +497,7 @@ def restore_date(user: User, prescription: Prescription, day: date) -> None:
 
 
 @transaction.atomic
+@journal.logged("Снято закрепление занятия")
 def unpin(user: User, booking: Booking, version: int, *, scope: str = ONE) -> EditResult:
     """«Открепить» (FR-SCH-10): подбор снова распоряжается занятием (этой даты или всех
     закреплённых занятий назначения начиная с неё)."""

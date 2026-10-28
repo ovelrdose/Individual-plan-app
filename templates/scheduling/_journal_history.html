@@ -1,0 +1,18 @@
+{# История пациента за неделю в панели шахматки (FR-SCH-19): последние записи журнала. history, program. #}
+{% if history %}
+  <details class="mt-2 small">
+    <summary class="text-body-secondary">История за неделю</summary>
+    <ul class="list-unstyled mb-1 mt-1 journal-history">
+      {% for item in history %}
+        <li class="mb-1">
+          <span class="text-body-secondary">{{ item.created_at|date:"d.m H:i" }}</span>
+          {{ item.subject }} {{ item.date_from|date:"d.m" }}{% if item.date_to != item.date_from %}–{{ item.date_to|date:"d.m" }}{% endif %}:
+          {{ item.shown.before|default:"—" }} → <strong>{{ item.shown.after|default:"—" }}</strong>{% if item.shown.kept %} <span class="text-body-secondary">(без изменений: {{ item.shown.kept }})</span>{% endif %}
+          <span class="text-body-secondary">— {% if item.user %}{{ item.user.short_name|default:item.user.username }}{% else %}система{% endif %}</span>
+          {% if item.reason %}<div class="text-body-secondary">{{ item.reason }}</div>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+    <a href="{% url 'scheduling:journal' %}?program={{ program.pk }}">Весь журнал пациента</a>
+  </details>
+{% endif %}

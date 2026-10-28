@@ -78,6 +78,8 @@ class Busy:
     date: date
     start: int
     end: int
+    # Что за занятие — для пояснений журнала («занят: Эрго общая 13:00»).
+    label: str = ""
 
 
 @dataclass(frozen=True)
@@ -150,6 +152,9 @@ class Issue:
 class Proposal:
     placements: list[Placement] = field(default_factory=list)
     issues: list[Issue] = field(default_factory=list)
+    # Почему тренажёр в этот день встал так или не встал: (назначение, дата) → текст для
+    # журнала расписания (FR-SCH-19).
+    reasons: dict[tuple[int, date], str] = field(default_factory=dict)
 
     @property
     def conflicts(self) -> list[Issue]:

@@ -1,15 +1,23 @@
 {% extends "base.html" %}
 
-{% block title %}Смены инструкторов{% endblock %}
+{% block title %}Инструкторы{% endblock %}
 
 {% block content %}
-  <h1 class="h3">Смены инструкторов</h1>
+  {% include "staff/_tabs.html" with active="shifts" %}
   <p class="text-body-secondary">
-    Рабочие дни идут по шаблону смены инструктора (2/2, 5/2, каждый день). Клик по дню делает его
-    нерабочим или рабочим вопреки шаблону — это исключение, оно выделено рамкой; повторный клик
-    возвращает день к шаблону. Напарники 2/2 стоят рядом.
-    Новых инструкторов, напарников 2/2 и порядок колонок ведут в
-    {% if can_open_catalog %}<a href="{% url 'catalog:index' %}?tab=instructors">«Справочниках»</a>{% else %}«Справочниках»{% endif %}.
+    Строка — инструктор, напарники 2/2 стоят рядом. <i class="bi bi-gear"></i> — карточка: фамилия,
+    ФИО, напарник, порядок колонок в расписании и шаблон смены (2/2, 5/2, каждый день). Клик по дню
+    делает его нерабочим или рабочим вопреки шаблону — это исключение, оно выделено рамкой;
+    повторный клик возвращает день к шаблону.
   </p>
   {% include "staff/_shift_calendar.html" %}
+
+  {# Окно карточки, как в «Справочниках» (static/js/prescriptions.js). #}
+  <div class="modal fade" id="edit-modal" tabindex="-1" aria-label="Карточка инструктора" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-content">
+        <div id="instructor-panel" class="d-none"></div>
+      </div>
+    </div>
+  </div>
 {% endblock %}

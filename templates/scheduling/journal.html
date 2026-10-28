@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}Журнал расписания{% endblock %}
+
+{% block content %}
+  <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
+    <h1 class="h3 mb-0 me-3">Журнал расписания</h1>
+    {% if program %}
+      <span class="badge text-bg-primary fs-6 fw-normal">{{ program.room_label }} {{ program.surname }}</span>
+      <a class="btn btn-sm btn-link" href="{% url 'scheduling:journal' %}">все пациенты</a>
+    {% endif %}
+    <a class="btn btn-sm btn-outline-secondary ms-auto" href="{% url 'scheduling:board' %}"><i class="bi bi-grid-3x3"></i> К расписанию</a>
+  </div>
+  <p class="text-body-secondary small mb-2">
+    Кто или что поставило пациента на индивидуальные и тренажёры, куда и почему. Только изменения:
+    пересчёт, после которого всё осталось на месте, не записывается. Перенос тренажёра на весь
+    курс — одна строка с диапазоном дат. Хранится {{ keep_days }} дней.
+  </p>
+
+  <form method="get" class="row g-2 align-items-end mb-3">
+    {% if program %}<input type="hidden" name="program" value="{{ program.pk }}">{% endif %}
+    <div class="col-auto">
+      <label for="journal-date" class="form-label small mb-0">Дата расписания</label>
+      <input id="journal-date" type="date" name="date" value="{{ filters.day|date:'Y-m-d' }}" class="form-control form-control-sm">
+    </div>
+    {% if not program %}
+      <div class="col-auto">
+        <label for="journal-patient" class="form-label small mb-0">Пациент</label>
+        <input id="journal-patient" name="patient" value="{{ filters.patient }}" placeholder="фамилия или палата" class="form-control form-control-sm">
+      </div>
+    {% endif %}
+    <div class="col-auto">
+      <label for="journal-subject" class="form-label small mb-0">Что</label>
+      <select id="journal-subject" name="subject" class="form-select form-select-sm">
+        <option value="">всё</option>
+        {% for value, label in subjects %}
+          <option value="{{ value }}"{% if filters.subject == value %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-auto">
+      <label for="journal-source" class="form-label small mb-0">Кто</label>
+      <select id="journal-source" name="source" class="form-select form-select-sm">
+        <option value="">все</option>
+        <option value="system"{% if filters.source == "system" %} selected{% endif %}>Система</option>
+        <option value="manual"{% if filters.source == "manual" %} selected{% endif %}>Сотрудники</option>
+      </select>
+    </div>
+    <div class="col-auto">
+      <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-funnel"></i> Показать</button>
+      <a class="btn btn-sm btn-link" href="{% url 'scheduling:journal' %}{% if program %}?program={{ program.pk }}{% endif %}">Сбросить</a>
+    </div>
+  </form>
+
+  {% if page.object_list %}
+    <div class="table-responsive">
+      <table class="table table-sm align-top journal-table">
+        <thead class="table-light">
+          <tr>
+            <th>Когда</th>
+            {% if not program %}<th>Пациент</th>{% endif %}
+            <th>Что</th>
+            <th>Даты</th>
+            <th>Было → стало</th>
+            <th>Кто и что сделал</th>
+            <th>Почему</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in page.object_list %}
+            <tr>
+              <td class="text-nowrap">{{ item.created_at|date:"d.m H:i" }}</td>
+              {% if not program %}
+                <td class="text-nowrap"><a href="?program={{ item.program_id }}" title="Журнал пациента">{{ item.program.room_label }} {{ item.program.surname }}</a></td>
+              {% endif %}
+              <td class="text-nowrap">{{ item.subject }}</td>
+              <td class="text-nowrap">{{ item.date_from|date:"d.m" }}{% if item.date_to != item.date_from %}–{{ item.date_to|date:"d.m" }}{% endif %}</td>
+              <td>
+                <span class="text-body-secondary">{{ item.shown.before|default:"—" }}</span>
+                <i class="bi bi-arrow-right mx-1"></i>
+                <strong>{{ item.shown.after|default:"—" }}</strong>
+                {% if item.shown.kept %}<div class="small text-body-secondary">без изменений: {{ item.shown.kept }}</div>{% endif %}
+              </td>
+              <td>
+                {% if item.user %}<i class="bi bi-person"></i> {{ item.user.short_name|default:item.user.username }}{% else %}<i class="bi bi-cpu"></i> Система{% endif %}
+                <div class="small text-body-secondary">{{ item.action }}</div>
+              </td>
+              <td class="small">{{ item.reason|default:"—" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if page.has_other_pages %}
+      <nav class="d-flex gap-2 align-items-center">
+        {% if page.has_previous %}<a class="btn btn-sm btn-outline-secondary" href="?{{ query }}&page={{ page.previous_page_number }}">Новее</a>{% endif %}
+        <span class="small text-body-secondary">стр. {{ page.number }} из {{ page.paginator.num_pages }}</span>
+        {% if page.has_next %}<a class="btn btn-sm btn-outline-secondary" href="?{{ query }}&page={{ page.next_page_number }}">Старше</a>{% endif %}
+      </nav>
+    {% endif %}
+  {% else %}
+    <div class="alert alert-secondary">Записей нет.</div>
+  {% endif %}
+{% endblock %}

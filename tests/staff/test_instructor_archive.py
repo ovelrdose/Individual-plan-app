@@ -40,7 +40,7 @@ def test_archive_moves_patients_breaks_pair_and_ends_duties(
     board.add_duty(rehab, volkov, slots["9:10"], MON, "GROUP_LEAD", group_session=led)
     board.add_block(rehab, volkov, slots["11:10"], WED, "BOS")
     client.force_login(rehab)
-    url = reverse("catalog:instructor_delete", args=[volkov.pk])
+    url = reverse("staff:instructor_delete", args=[volkov.pk])
 
     step = htmx(client, url)
     assert "уйдёт в архив" in step and "Лебедева останется один" in step
@@ -78,7 +78,7 @@ def test_unused_deleted(client, rehab, staff):
     new = Instructor.objects.create(full_name="Новиков Н.Н.", short_name="Новиков")
     staff_services.set_partner(new, staff["sokolov"])
     client.force_login(rehab)
-    url = reverse("catalog:instructor_delete", args=[new.pk])
+    url = reverse("staff:instructor_delete", args=[new.pk])
 
     assert "удалится совсем" in htmx(client, url)
     htmx(client, url, {"confirm": "1"})
@@ -88,7 +88,8 @@ def test_unused_deleted(client, rehab, staff):
     assert staff["sokolov"].partner is None
 
 
-def test_shifts_link_to_catalog(client, rehab, staff):
+def test_shifts_has_new_instructor_button(client, rehab, staff):
+    """Инструкторы заводятся там же, где смены (решение 87)."""
     client.force_login(rehab)
     html = client.get(reverse("staff:shifts")).content.decode()
-    assert reverse("catalog:index") + "?tab=instructors" in html
+    assert reverse("staff:instructor_add") in html

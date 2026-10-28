@@ -62,7 +62,7 @@ class TestScreen:
         pk = procedures["card_only"].pk
         for name in ("procedure_edit", "procedure_delete", "procedure_restore"):
             assert client.post(reverse(f"catalog:{name}", args=[pk])).status_code == 403
-        assert client.post(reverse("catalog:instructor_add")).status_code == 403
+        assert client.post(reverse("staff:instructor_add")).status_code == 403
 
     def test_filter_and_search(self, client, rehab, procedures):
         client.force_login(rehab)
@@ -309,7 +309,7 @@ class TestInstructors:
 
         html = htmx(
             client,
-            reverse("catalog:instructor_add"),
+            reverse("staff:instructor_add"),
             {
                 "ins-short_name": "Орлов",
                 "ins-full_name": "Орлов О.О.",
@@ -328,4 +328,4 @@ class TestInstructors:
         client.force_login(doctor)
         pk = staff["sokolov"].pk
         for name in ("instructor_edit", "instructor_delete", "instructor_restore"):
-            assert client.post(reverse(f"catalog:{name}", args=[pk])).status_code == 403
+            assert client.post(reverse(f"staff:{name}", args=[pk])).status_code == 403

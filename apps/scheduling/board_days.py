@@ -27,7 +27,9 @@ from apps.staff.domain import Pattern
 from apps.staff.models import Instructor
 from apps.staff.services import build_teams, instructor_calendars
 
+from . import journal
 from .domain.board_day import Column, GridSlot, Member, Patient, PatientDay, Seat, plan_day
+from .domain.journal import INDIVIDUAL
 from .domain.model import is_weekend
 from .models import BoardDay, BoardPatient, Booking, BookingKind, BookingSource
 
@@ -108,13 +110,20 @@ def create_board(day: date) -> bool:
     if BoardDay.objects.filter(date=day).exists():
         return False
     source = BoardDay.objects.filter(date__lt=day).order_by("-date").first()
-    BoardDay.objects.create(date=day)
-    # Индивидуальные, поставленные на эту дату раньше (прототип подбирал их на весь курс),
-    # шахматкой не являются — день составляется заново.
-    Booking.objects.filter(date=day, kind=BookingKind.INDIVIDUAL).delete()
-    BoardPatient.objects.filter(date=day).delete()
-    programs = _programs_on(day)
-    _recompute(day, programs, source=source.date if source else None, auto=True)
+    # Журнал ведётся неделю (решение 86): чистим раз в день — когда составляется шахматка.
+    journal.purge()
+    with journal.action(
+        f"Составлено расписание на {day:%d.%m}"
+        + (f" — перенос с {source.date:%d.%m}" if source else " — первое, все пациенты как новые")
+    ):
+        journal.new_board(day, source.date if source else None)
+        BoardDay.objects.create(date=day)
+        # Индивидуальные, поставленные на эту дату раньше (прототип подбирал их на весь курс),
+        # шахматкой не являются — день составляется заново.
+        Booking.objects.filter(date=day, kind=BookingKind.INDIVIDUAL).delete()
+        BoardPatient.objects.filter(date=day).delete()
+        programs = _programs_on(day)
+        _recompute(day, programs, source=source.date if source else None, auto=True)
     return True
 
 
@@ -171,6 +180,9 @@ def propagate(program: Program, day: date) -> None:
         return
     if BoardPatient.objects.filter(date=following, program=program, edited=True).exists():
         return
+    journal.explain(
+        program.pk, INDIVIDUAL, following, f"правка {day:%d.%m} перенесена на {following:%d.%m}"
+    )
     _recompute(following, [program], source=day, auto=True)
 
 
@@ -201,6 +213,7 @@ def _recompute(
     ``source`` (по умолчанию — с этой же даты) и записать результат."""
     if not programs:
         return
+    journal.watch(programs)
     ids = [p.pk for p in programs]
     origin = source or day
     slots = list(InstructorSlot.objects.order_by("start"))
@@ -219,7 +232,8 @@ def _recompute(
             seats=tuple(previous.get(program.pk, ())),
             unplaced=holds[program.pk].unplaced if program.pk in holds else 0,
             cancelled=holds[program.pk].cancelled if program.pk in holds else 0,
-            busy=tuple(busy[program.pk]),
+            busy=tuple(span for span, _label in busy[program.pk]),
+            busy_labels=tuple(label for _span, label in busy[program.pk]),
             evening_note=_evening_note(program, day),
             reserved=tuple(reserved[program.pk]),
         )
@@ -232,6 +246,8 @@ def _recompute(
         .values_list("instructor_id", "slot_id")
     )
     result = plan_day(patients, _columns(day, grid), grid, fixed=fixed, auto=auto)
+    for item in result:
+        journal.explain(item.program_id, INDIVIDUAL, day, item.why)
     by_slot = {s.pk: s for s in slots}
     for item in result:
         # Старые места пациента на этот день, которых нет в новом плане, убираем до сдвига
@@ -477,17 +493,20 @@ def _seats_on(day: date, program_ids: list[int]) -> dict[int, list[Seat]]:
     return result
 
 
-def _busy_on(day: date, program_ids: list[int]) -> dict[int, list[tuple[int, int]]]:
-    """Группы, бассейн и закреплённые тренажёры пациента в этот день. Тренажёр, поставленный
-    подбором, индивидуальному не мешает — он сдвигается (``fit_trainers``)."""
-    result: dict[int, list[tuple[int, int]]] = defaultdict(list)
-    for program_id, start, end in (
+def _busy_on(day: date, program_ids: list[int]) -> dict[int, list[tuple[tuple[int, int], str]]]:
+    """Группы, бассейн и закреплённые тренажёры пациента в этот день — время и название (для
+    пояснений журнала). Тренажёр, поставленный подбором, индивидуальному не мешает — он
+    сдвигается (``fit_trainers``)."""
+    result: dict[int, list[tuple[tuple[int, int], str]]] = defaultdict(list)
+    for program_id, start, end, label, name in (
         Booking.objects.filter(date=day, program__in=program_ids)
         .exclude(kind=BookingKind.INDIVIDUAL)
         .exclude(_movable_trainer())
-        .values_list("program_id", "start", "end")
+        .values_list("program_id", "start", "end", "procedure__card_label", "procedure__name")
     ):
-        result[program_id].append((minutes(start), minutes(end)))
+        result[program_id].append(
+            ((minutes(start), minutes(end)), f"{label or name} {start:%-H:%M}")
+        )
     return result
 
 
@@ -515,7 +534,9 @@ def _reserved_on(day: date, programs: list[Program]) -> dict[int, list[tuple[int
 def _columns(day: date, grid: list[GridSlot]) -> list[Column]:
     teams = build_teams()
     ids = [pk for team in teams for pk in team.member_ids]
-    calendars = instructor_calendars(list(Instructor.objects.filter(pk__in=ids)), day, day)
+    instructors = list(Instructor.objects.filter(pk__in=ids))
+    names = {item.pk: item.short_name for item in instructors}
+    calendars = instructor_calendars(instructors, day, day)
     slot_ids = [slot.id for slot in grid]
     columns = []
     for team in teams:
@@ -533,6 +554,7 @@ def _columns(day: date, grid: list[GridSlot]) -> list[Column]:
                     evening=item.working
                     and rule is not None
                     and Pattern(rule.pattern) is Pattern.TWO_TWO,
+                    name=names.get(pk, ""),
                 )
             )
         columns.append(Column(team.key, tuple(members)))

@@ -130,8 +130,9 @@ def _link(
 
 
 def can_edit_instructors(user: User) -> bool:
-    """Справочник инструкторов — право «Справочники» (решение 83)."""
-    return has_right(user, Right.CATALOG)
+    """Состав инструкторов и пары 2/2 — то же право «Инструкторы», что смены и распорядок:
+    всё об инструкторе на одном экране (решение 87)."""
+    return has_right(user, Right.STAFF)
 
 
 def require_instructors(user: User) -> None:
@@ -174,7 +175,7 @@ def save_instructor_card(
 
 
 def can_manage_staff(user: User) -> bool:
-    """Смены и распорядок — право «Инструкторы: смены и распорядок» (решение 79)."""
+    """Состав, смены и распорядок — право «Инструкторы» (решения 79, 87)."""
     return has_right(user, Right.STAFF)
 
 

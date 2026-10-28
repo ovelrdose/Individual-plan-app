@@ -1,4 +1,5 @@
-"""Экраны «Смены» (FR-STF-4) и «Распорядок инструкторов» (FR-STF-5) — сетки с кликом по ячейке.
+"""Раздел «Инструкторы» (решение 87): «Состав и смены» — календарь смен (FR-STF-4) с карточкой
+инструктора в окне (FR-STF-1, 2), «Распорядок» (FR-STF-5) и «Загрузка» (FR-SCH-17) — вкладки.
 
 Представления тонкие: права и правила — в services. Действия HTMX возвращают фрагмент целиком
 (``hx-swap="outerHTML"``), ошибки форм — в том же фрагменте со статусом 200.
@@ -9,14 +10,17 @@ from datetime import date, timedelta
 from django.core.exceptions import ValidationError
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, render
+from django.template.loader import render_to_string
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
+from apps.accounts.access import departments_for
 from apps.catalog.models import GroupSession, InstructorSlot
 from apps.scheduling import board, staff_changes
 
 from . import services
-from .forms import ShiftPatternForm, board_sessions
+from .forms import InstructorForm, board_sessions
 from .models import BlockKind, Instructor
 
 MONTHS = [
@@ -46,36 +50,6 @@ def shift_toggle(request: HttpRequest, pk: int) -> HttpResponse:
     return _shifts_response(request, (day.year, day.month))
 
 
-def shift_pattern(request: HttpRequest, pk: int) -> HttpResponse:
-    """Задать или сменить шаблон смены инструктора с даты (форма в строке календаря)."""
-    services.require_staff_manager(request.user)
-    instructor = get_object_or_404(Instructor, pk=pk, is_active=True)
-    month = _month(request)
-    if request.method == "POST":
-        form = ShiftPatternForm(request.POST, prefix="pattern")
-        if form.is_valid():
-            try:
-                services.change_shift_pattern(request.user, instructor, **form.cleaned_data)
-            except (services.StaffError, ValidationError) as error:
-                _add_errors(form, error)
-            else:
-                staff_changes.after_pattern(
-                    request.user, instructor, form.cleaned_data["valid_from"]
-                )
-                return _shifts_response(request, month)
-    else:
-        current = services.current_pattern(instructor, timezone.localdate())
-        form = ShiftPatternForm(
-            prefix="pattern",
-            initial={
-                "pattern": current.pattern if current else "",
-                "anchor_date": current.anchor_date if current else timezone.localdate(),
-                "valid_from": timezone.localdate(),
-            },
-        )
-    return _shifts_response(request, month, pattern_form=form, pattern_for=instructor)
-
-
 def _month(request: HttpRequest) -> tuple[int, int]:
     value = request.GET.get("month") or request.POST.get("month") or ""
     try:
@@ -91,8 +65,10 @@ def _shifts_context(request: HttpRequest, month: tuple[int, int], **extra) -> di
     year, number = month
     previous = (year - 1, 12) if number == 1 else (year, number - 1)
     following = (year + 1, 1) if number == 12 else (year, number + 1)
+    items = list(Instructor.objects.filter(is_active=False).order_by("short_name"))
     return {
         "rows": services.shift_month(request.user, year, number),
+        "archived": items,
         "days": services.month_days(year, number),
         "month_value": f"{year}-{number:02d}",
         "month_title": f"{MONTHS[number - 1].capitalize()} {year}",
@@ -105,6 +81,165 @@ def _shifts_context(request: HttpRequest, month: tuple[int, int], **extra) -> di
 
 def _shifts_response(request: HttpRequest, month: tuple[int, int], **extra) -> HttpResponse:
     return render(request, "staff/_shift_calendar.html", _shifts_context(request, month, **extra))
+
+
+# --- Карточка инструктора (окно на «Составе и сменах») -------------------------------------
+# Действие возвращает содержимое окна, календарь — через hx-swap-oob (как «Справочники»).
+
+
+def _instructor(request: HttpRequest, pk: int) -> Instructor:
+    services.require_instructors(request.user)
+    return get_object_or_404(Instructor, pk=pk)
+
+
+def _pattern_initial(instructor: Instructor | None) -> dict:
+    today = timezone.localdate()
+    # У архивного шаблона в окне нет: смену ему задают после возврата.
+    current = (
+        services.current_pattern(instructor, today) if instructor and instructor.is_active else None
+    )
+    return {
+        "pattern": current.pattern if current else "",
+        "anchor_date": current.anchor_date if current else None,
+        "valid_from": today,
+    }
+
+
+def instructor_add(request: HttpRequest) -> HttpResponse:
+    services.require_instructors(request.user)
+    form = InstructorForm(request.POST or None, prefix="ins", initial=_pattern_initial(None))
+    if request.method == "POST" and form.is_valid():
+        saved, error = _save_instructor(request, form)
+        if saved is not None:
+            message = f"Инструктор «{saved.short_name}» заведён."
+            if not form.cleaned_data["pattern"]:
+                message += " Шаблон смены не задан — пока он не работает ни в один день."
+            return _instructor_panel(request, saved, message=message, error=error)
+    return _instructor_panel(request, None, form=form)
+
+
+def instructor_edit(request: HttpRequest, pk: int) -> HttpResponse:
+    instructor = _instructor(request, pk)
+    if request.method != "POST":
+        return _instructor_panel(request, instructor)
+    form = InstructorForm(
+        request.POST, instance=instructor, prefix="ins", initial=_pattern_initial(instructor)
+    )
+    if form.is_valid():
+        saved, error = _save_instructor(request, form)
+        if saved is not None:
+            return _instructor_panel(
+                request, saved, message="" if error else "Сохранено.", error=error
+            )
+    instructor.refresh_from_db()
+    return _instructor_panel(request, instructor, form=form)
+
+
+def _save_instructor(request: HttpRequest, form: InstructorForm) -> tuple[Instructor | None, str]:
+    """Карточка, затем шаблон смены, если его сменили. Ошибка карточки — в форме (None);
+    ошибка шаблона — текстом: карточка к этому времени уже сохранена."""
+    try:
+        saved = services.save_instructor_card(
+            request.user, form.instance, form.cleaned_data["partner"]
+        )
+    except (services.StaffError, ValidationError) as error:
+        _add_errors(form, error)
+        return None, ""
+    change = form.pattern_change()
+    if change is None:
+        return saved, ""
+    try:
+        services.change_shift_pattern(request.user, saved, **change)
+    except (services.StaffError, ValidationError) as error:
+        return saved, f"Карточка сохранена, а шаблон смены — нет: {_text(error)}"
+    staff_changes.after_pattern(request.user, saved, change["valid_from"])
+    return saved, ""
+
+
+@require_POST
+def instructor_delete(request: HttpRequest, pk: int) -> HttpResponse:
+    instructor = _instructor(request, pk)
+    if not request.POST.get("confirm"):
+        details = []
+        if instructor.partner_id:
+            details.append(f"Пара 2/2 разорвётся: {instructor.partner} останется один.")
+        confirm = {
+            "used": staff_changes.instructor_is_used(instructor),
+            "programs": None,
+            "details": details,
+            "url": reverse("staff:instructor_delete", args=[instructor.pk]),
+        }
+        return _instructor_panel(request, instructor, confirm=confirm)
+    try:
+        removed = staff_changes.delete_instructor(request.user, instructor)
+    except services.StaffError as error:
+        return _instructor_panel(request, instructor, error=str(error))
+    if not removed.archived:
+        return _instructor_panel(
+            request, None, message=f"Инструктор «{instructor.short_name}» удалён.", closed=True
+        )
+    instructor.refresh_from_db()
+    return _instructor_panel(request, instructor, removed=removed)
+
+
+@require_POST
+def instructor_restore(request: HttpRequest, pk: int) -> HttpResponse:
+    instructor = _instructor(request, pk)
+    staff_changes.restore_instructor(request.user, instructor)
+    instructor.refresh_from_db()
+    return _instructor_panel(
+        request,
+        instructor,
+        message=f"«{instructor.short_name}» снова работает. Задайте ему шаблон смены и напарника.",
+    )
+
+
+def _instructor_panel(
+    request: HttpRequest,
+    instructor: Instructor | None,
+    *,
+    form: InstructorForm | None = None,
+    message: str = "",
+    error: str = "",
+    confirm: dict | None = None,
+    removed: object | None = None,
+    closed: bool = False,
+) -> HttpResponse:
+    if instructor is not None and form is None:
+        form = InstructorForm(
+            instance=instructor, prefix="ins", initial=_pattern_initial(instructor)
+        )
+    displaced, hidden = [], 0
+    if removed is not None:
+        # Фамилии — только пациентов своих отделений (FR-ACC-2), чужие — числом.
+        own = set(departments_for(request.user).values_list("pk", flat=True))
+        displaced = [d for d in removed.displaced if d.program.department_id in own]
+        hidden = len({d.program.pk for d in removed.displaced} - {d.program.pk for d in displaced})
+    month = _month(request)
+    panel = render_to_string(
+        "staff/_instructor_panel.html",
+        {
+            "instructor": instructor,
+            "form": None if closed else form,
+            "patterns": list(instructor.shift_patterns.order_by("valid_from"))
+            if instructor is not None and instructor.pk
+            else [],
+            "month_value": f"{month[0]}-{month[1]:02d}",
+            "message": message,
+            "error": error,
+            "confirm": confirm,
+            "removed": removed,
+            "displaced": displaced,
+            "hidden": hidden,
+        },
+        request=request,
+    )
+    calendar = render_to_string(
+        "staff/_shift_calendar.html",
+        _shifts_context(request, month, selected=instructor.pk if instructor else None, oob=True),
+        request=request,
+    )
+    return HttpResponse(panel + calendar)
 
 
 # --- Распорядок ----------------------------------------------------------------------------

@@ -1,0 +1,7 @@
+{# Вкладки раздела «Инструкторы» (решение 87). active — имя вкладки. #}
+<h1 class="h3">Инструкторы</h1>
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item"><a class="nav-link {% if active == 'shifts' %}active{% endif %}" href="{% url 'staff:shifts' %}"><i class="bi bi-calendar3"></i> Состав и смены</a></li>
+  <li class="nav-item"><a class="nav-link {% if active == 'duties' %}active{% endif %}" href="{% url 'staff:duties' %}"><i class="bi bi-list-check"></i> Распорядок</a></li>
+  <li class="nav-item"><a class="nav-link {% if active == 'load' %}active{% endif %}" href="{% url 'scheduling:load' %}"><i class="bi bi-bar-chart"></i> Загрузка</a></li>
+</ul>

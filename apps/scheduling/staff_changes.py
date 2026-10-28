@@ -24,7 +24,7 @@ from apps.staff.models import (
     ShiftPattern,
 )
 
-from . import board_days
+from . import board_days, journal
 from .models import Booking, BookingKind
 
 
@@ -59,25 +59,32 @@ def rebuild(instructor: Instructor, start: date, end: date | None) -> None:
 
 def after_shift_toggle(user: User, instructor: Instructor, day: date) -> None:
     """Клик в «Сменах» или «не работает» в шахматке (FR-STF-6)."""
-    rebuild(instructor, day, day)
+    with journal.action(f"Изменилась смена: {instructor} {day:%d.%m}", user):
+        rebuild(instructor, day, day)
 
 
 def set_not_working(user: User, instructor: Instructor, day: date) -> None:
     """«Не работает» из шахматки одним действием: исключение смены и «Не распределены»."""
-    staff_services.set_working(user, instructor, day, False)
-    after_shift_toggle(user, instructor, day)
+    with journal.action(f"{instructor} не работает {day:%d.%m}", user):
+        staff_services.set_working(user, instructor, day, False)
+        after_shift_toggle(user, instructor, day)
 
 
 def after_block(user: User, block: InstructorBlock) -> None:
-    rebuild(block.instructor, block.date, block.date)
+    with journal.action(
+        f"Занятость инструктора: {block.instructor} {block.date:%d.%m} — {block}", user
+    ):
+        rebuild(block.instructor, block.date, block.date)
 
 
 def after_duty(user: User, duty: InstructorDuty) -> None:
-    rebuild(duty.instructor, duty.valid_from, duty.valid_to)
+    with journal.action(f"Изменился распорядок: {duty.instructor} — {duty}", user):
+        rebuild(duty.instructor, duty.valid_from, duty.valid_to)
 
 
 def after_pattern(user: User, instructor: Instructor, valid_from: date) -> None:
-    rebuild(instructor, valid_from, None)
+    with journal.action(f"Изменился график смен: {instructor} с {valid_from:%d.%m}", user):
+        rebuild(instructor, valid_from, None)
 
 
 # --- Группа больше не идёт в слоте инструктора (решение 82) ----------------------------------
@@ -177,6 +184,7 @@ def instructor_is_used(instructor: Instructor) -> bool:
     )
 
 
+@journal.logged("Инструктор удалён или в архиве")
 def delete_instructor(user: User, instructor: Instructor) -> InstructorRemoved:
     """«Удалить» инструктора. Ни разу не работавший удаляется совсем. Иначе — в архив: с
     сегодняшнего дня его нет в сменах и шахматке, шаблон смены и распорядок заканчиваются
@@ -238,9 +246,10 @@ def _archive_or_delete(user: User, instructor: Instructor, today: date) -> Instr
 
 
 @transaction.atomic
+@journal.logged("Инструктор возвращён из архива")
 def restore_instructor(user: User, instructor: Instructor) -> Instructor:
     """«Вернуть из архива»: инструктор снова действует, но без смены — шаблон смены задают
-    на экране «Смены», напарника — в его окне."""
+    и напарника — в его карточке."""
     staff_services.require_instructors(user)
     instructor = Instructor.objects.select_for_update().get(pk=instructor.pk)
     instructor.is_active = True

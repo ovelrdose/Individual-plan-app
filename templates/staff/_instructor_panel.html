@@ -1,4 +1,4 @@
-{# Окно правки инструктора (FR-STF-1, решение 83): поля, «Удалить» (архив) / «Вернуть». #}
+{# Карточка инструктора (FR-STF-1, 2, решения 83, 87): поля, шаблон смены, «Удалить» (архив) / «Вернуть». #}
 {% if form or message or error or removed %}
 <div id="instructor-panel" class="side-panel">
   <div class="card border-0">
@@ -8,6 +8,7 @@
       <button type="button" class="btn-close ms-auto" data-panel-close aria-label="Закрыть"></button>
     </div>
     <div class="card-body">
+      <input type="hidden" id="instructor-month" name="month" value="{{ month_value }}">
       {% if message %}<div class="alert alert-success py-2">{{ message }}</div>{% endif %}
       {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
       {% if removed %}
@@ -25,19 +26,35 @@
         {% endif %}
       {% endif %}
       {% if confirm %}
-        {% url 'catalog:instructor_edit' instructor.pk as cancel_url %}
-        {% include "includes/_confirm_delete.html" with used_text="Инструктор уже работал — он уйдёт в архив: с сегодняшнего дня его нет в сменах и расписании, его пациенты на сегодня и завтра уйдут в «Не распределены», шаблон смены, распорядок и «Ведение группы» закончатся сегодня." unused_text="Инструктор ни разу не стоял в сменах и расписании — он удалится совсем." target="#instructor-panel" %}
+        {% url 'staff:instructor_edit' instructor.pk as cancel_url %}
+        {% include "includes/_confirm_delete.html" with used_text="Инструктор уже работал — он уйдёт в архив: с сегодняшнего дня его нет в сменах и расписании, его пациенты на сегодня и завтра уйдут в «Не распределены», шаблон смены, распорядок и «Ведение группы» закончатся сегодня." unused_text="Инструктор ни разу не стоял в сменах и расписании — он удалится совсем." target="#instructor-panel" include="#instructor-month" %}
       {% endif %}
       {% if form %}
-        <form hx-post="{% if instructor %}{% url 'catalog:instructor_edit' instructor.pk %}{% else %}{% url 'catalog:instructor_add' %}{% endif %}"
+        <form hx-post="{% if instructor %}{% url 'staff:instructor_edit' instructor.pk %}{% else %}{% url 'staff:instructor_add' %}{% endif %}"
               hx-target="#instructor-panel" hx-swap="outerHTML">
           {% for e in form.non_field_errors %}<div class="alert alert-danger py-2">{{ e }}</div>{% endfor %}
+          <input type="hidden" name="month" value="{{ month_value }}">
           <div class="row g-2">
             <div class="col-md-5">{% include "includes/form_field.html" with field=form.short_name %}</div>
             <div class="col-md-7">{% include "includes/form_field.html" with field=form.full_name %}</div>
             <div class="col-md-8">{% include "includes/form_field.html" with field=form.partner %}</div>
             <div class="col-md-4">{% include "includes/form_field.html" with field=form.display_order %}</div>
           </div>
+          {% if not instructor or instructor.is_active %}
+            <div class="fw-semibold mt-1 mb-1">Смена</div>
+            <div class="row g-2">
+              <div class="col-md-4">{% include "includes/form_field.html" with field=form.pattern %}</div>
+              <div class="col-md-4">{% include "includes/form_field.html" with field=form.anchor_date %}</div>
+              <div class="col-md-4">{% include "includes/form_field.html" with field=form.valid_from %}</div>
+            </div>
+            {% if patterns %}
+              <div class="small text-body-secondary mb-2">
+                Периоды:
+                {% for item in patterns %}{{ item.get_pattern_display }} с {{ item.valid_from|date:"d.m.Y" }}{% if item.valid_to %} по {{ item.valid_to|date:"d.m.Y" }}{% endif %}{% if not forloop.last %}; {% endif %}{% endfor %}.
+                Отдельные дни — кликом в календаре.
+              </div>
+            {% endif %}
+          {% endif %}
           <button type="submit" class="btn btn-success">Сохранить</button>
           <button type="button" class="btn btn-link" data-panel-close>Отмена</button>
         </form>
@@ -46,10 +63,10 @@
           <div class="d-flex">
             {% if instructor.is_active %}
               <button type="button" class="btn btn-sm btn-outline-danger ms-auto"
-                      hx-post="{% url 'catalog:instructor_delete' instructor.pk %}" hx-target="#instructor-panel" hx-swap="outerHTML"><i class="bi bi-trash"></i> Удалить</button>
+                      hx-post="{% url 'staff:instructor_delete' instructor.pk %}" hx-vals='{"month": "{{ month_value }}"}' hx-target="#instructor-panel" hx-swap="outerHTML"><i class="bi bi-trash"></i> Удалить</button>
             {% else %}
               <button type="button" class="btn btn-sm btn-outline-primary ms-auto"
-                      hx-post="{% url 'catalog:instructor_restore' instructor.pk %}" hx-target="#instructor-panel" hx-swap="outerHTML"><i class="bi bi-arrow-counterclockwise"></i> Вернуть из архива</button>
+                      hx-post="{% url 'staff:instructor_restore' instructor.pk %}" hx-vals='{"month": "{{ month_value }}"}' hx-target="#instructor-panel" hx-swap="outerHTML"><i class="bi bi-arrow-counterclockwise"></i> Вернуть из архива</button>
             {% endif %}
           </div>
         {% endif %}

@@ -24,7 +24,7 @@ from apps.programs.services import (
     require_editable,
     save_program,
 )
-from apps.scheduling import board_days
+from apps.scheduling import board_days, journal
 from apps.scheduling.services import replan
 
 from .matching import ProcedureRef, match_with_typos
@@ -125,6 +125,7 @@ def _dose(duration_min: int | None, per_day: int) -> str:
 
 
 @transaction.atomic
+@journal.logged("Импорт листа назначений")
 def import_prescription_sheet(
     user: User,
     department: Department,
@@ -402,6 +403,7 @@ def preview_sheet_update(
 
 
 @transaction.atomic
+@journal.logged("Обновление из новой версии листа назначений")
 def apply_sheet_update(
     user: User, program: Program, sheet: Sheet, *, today: date | None = None
 ) -> SheetUpdate:

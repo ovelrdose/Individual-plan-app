@@ -21,7 +21,11 @@
     <a class="btn btn-sm btn-link" href="{% url 'scheduling:board' %}">Сегодня</a>
     <a class="btn btn-sm btn-link px-0" href="{% url 'scheduling:board' %}?date={{ board.following|date:'Y-m-d' }}">{{ board.following_label }}</a>
     <span class="fw-semibold ms-2">{{ board.day|date:"l, j E Y" }}</span>
-    <a class="btn btn-sm btn-outline-success ms-auto" hx-boost="false" href="{% url 'scheduling:board_export' %}?date={{ board.day|date:'Y-m-d' }}">
+    {% if can_journal %}
+      <a class="btn btn-sm btn-outline-secondary ms-auto" href="{% url 'scheduling:journal' %}?date={{ board.day|date:'Y-m-d' }}"
+         title="Кто и почему поставил пациентов в расписание этого дня"><i class="bi bi-clock-history"></i> Журнал</a>
+    {% endif %}
+    <a class="btn btn-sm btn-outline-success{% if not can_journal %} ms-auto{% endif %}" hx-boost="false" href="{% url 'scheduling:board_export' %}?date={{ board.day|date:'Y-m-d' }}">
       <i class="bi bi-file-earmark-excel"></i> Выгрузить в Excel
     </a>
   </div>

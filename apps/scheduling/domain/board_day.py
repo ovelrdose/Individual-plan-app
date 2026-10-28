@@ -14,7 +14,8 @@
    решение 81): выбор не должен упираться в индивидуальное.
 
 Два индивидуальных пациента не идут подряд, пациент не бывает в двух местах сразу.
-Время — минуты от полуночи.
+Время — минуты от полуночи. ``PatientDay.why`` — почему пациент встал туда или не встал:
+для журнала расписания (FR-SCH-19).
 """
 
 from collections import Counter
@@ -40,6 +41,7 @@ class Member:
     working: bool
     free: frozenset[int] = frozenset()
     evening: bool = False
+    name: str = ""
 
     def can_take(self, slot: GridSlot) -> bool:
         return self.working and slot.id in self.free
@@ -82,6 +84,16 @@ class Patient:
     busy: tuple[tuple[int, int], ...] = ()
     evening_note: str = ""
     reserved: tuple[tuple[int, int], ...] = ()
+    # Названия занятий ``busy`` в том же порядке — для пояснений («занят: Эрго общая»).
+    busy_labels: tuple[str, ...] = ()
+
+    def busy_at(self, slot: "GridSlot") -> str:
+        """Чем пациент занят в это время ('' — свободен)."""
+        for index, (start, end) in enumerate(self.busy):
+            if start < slot.end and slot.start < end:
+                label = self.busy_labels[index] if index < len(self.busy_labels) else ""
+                return label or "другое занятие"
+        return ""
 
 
 @dataclass(frozen=True)
@@ -90,6 +102,8 @@ class PatientDay:
     seats: tuple[Seat, ...] = ()
     unplaced: int = 0
     cancelled: int = 0
+    # Пояснение для журнала — не часть результата: в сравнении не участвует.
+    why: str = field(default="", compare=False)
 
 
 @dataclass
@@ -98,6 +112,7 @@ class _State:
     seats: list[Seat] = field(default_factory=list)
     unplaced: int = 0
     cancelled: int = 0
+    notes: list[str] = field(default_factory=list)
 
 
 def plan_day(
@@ -120,10 +135,17 @@ def plan_day(
         missing = _missing(state)
         if missing and auto:
             planner.auto(state, missing)
-        else:
+        elif missing:
             state.unplaced += missing
+            state.notes.append(
+                f"{_count(missing)} в «Не распределены»: сегодняшнее расписание сама система "
+                "не заполняет — ставит специалист"
+            )
     return [
-        PatientDay(s.patient.program_id, tuple(s.seats), s.unplaced, s.cancelled) for s in states
+        PatientDay(
+            s.patient.program_id, tuple(s.seats), s.unplaced, s.cancelled, "; ".join(s.notes)
+        )
+        for s in states
     ]
 
 
@@ -137,6 +159,7 @@ class _Planner:
         self.slots = sorted(slots, key=lambda s: s.start)
         self.slot = {s.id: s for s in slots}
         self.column_of = {m.id: c for c in columns for m in c.members}
+        self.member = {m.id: m for c in columns for m in c.members}
         self.taken: Counter[tuple[str, int]] = Counter()
         self.load: Counter[str] = Counter()
         for seat in fixed:
@@ -156,43 +179,149 @@ class _Planner:
         known = [s for s in patient.seats if s.slot_id in self.slot]
         for seat in sorted(known, key=lambda s: self.slot[s.slot_id].start):
             if len(state.seats) >= need:
+                state.notes.append(
+                    f"{self._where(seat)} убрано: индивидуальных в этот день меньше "
+                    "(назначение изменилось или день без занятий)"
+                )
                 break
-            moved = self._carry_seat(seat)
-            if moved is not None and self._fits(state, self.slot[moved.slot_id]):
+            slot = self.slot[seat.slot_id]
+            moved, why = self._carry_seat(seat)
+            if moved is not None:
+                why = self._why_not_fits(state, slot)
+            if moved is not None and not why:
+                if moved.instructor_id != seat.instructor_id:
+                    state.notes.append(
+                        f"{self._name(seat.instructor_id)} в {_hhmm(slot.start)} не работает — "
+                        f"к напарнику {self._name(moved.instructor_id)}"
+                    )
                 self._place(state, moved)
             else:
                 failed += 1
-        failed += len(patient.seats) - len(known)
+                state.notes.append(f"{self._where(seat)}: {why} — в «Не распределены»")
+        lost = len(patient.seats) - len(known)
+        if lost:
+            failed += lost
+            state.notes.append(f"{_count(lost)}: слота больше нет в сетке — в «Не распределены»")
         free = need - len(state.seats)
         state.cancelled = min(patient.cancelled, free)
         state.unplaced = min(patient.unplaced + failed, free - state.cancelled)
         return state
 
-    def _carry_seat(self, seat: Seat) -> Seat | None:
+    def _carry_seat(self, seat: Seat) -> tuple[Seat | None, str]:
+        """Куда перенести ячейку и, если некуда, — почему."""
         column = self.column_of.get(seat.instructor_id)
         if column is None:
-            return None
+            return None, "инструктора нет в расписании этого дня (архив или вне смен)"
         slot = self.slot[seat.slot_id]
         # Сам инструктор, а если он не вышел — напарник по 2/2: колонка у пары общая.
         members = sorted(column.members, key=lambda m: m.id != seat.instructor_id)
         for member in members:
             if member.can_take(slot):
-                return Seat(member.id, slot.id, seat.note)
-        return None
+                return Seat(member.id, slot.id, seat.note), ""
+        reasons = [
+            ("" if m.id == seat.instructor_id else f"напарник {m.name or 'инструктор'} ")
+            + ("не работает" if not m.working else "занят (распорядок)")
+            for m in members
+        ]
+        return None, ", ".join(reasons)
+
+    def _why_not_fits(self, state: _State, slot: GridSlot) -> str:
+        """Почему пациенту нельзя в это время ('' — можно)."""
+        busy = state.patient.busy_at(slot)
+        if busy:
+            return f"пациент в это время занят: {busy}"
+        for seat in state.seats:
+            own = self.slot[seat.slot_id]
+            if max(own.start - slot.end, slot.start - own.end) <= ADJACENT_GAP:
+                return f"подряд с другим индивидуальным в {_hhmm(own.start)}"
+        return ""
+
+    def _name(self, instructor_id: int) -> str:
+        member = self.member.get(instructor_id)
+        return member.name if member is not None and member.name else "инструктор"
+
+    def _where(self, seat: Seat) -> str:
+        slot = self.slot.get(seat.slot_id)
+        time = _hhmm(slot.start) if slot is not None else "?"
+        return f"{self._name(seat.instructor_id)} {time}"
 
     def auto(self, state: _State, missing: int) -> None:
         note = state.patient.evening_note
         evening = bool(note) and not any(self.slot[s.slot_id].evening for s in state.seats)
         for _ in range(missing):
             seat = self._best(state, evening, note if evening else "", reserved=True)
+            around = True
             if seat is None:
                 # Обойти возможные времена групп нельзя — ставим всё равно (решение 81).
                 seat = self._best(state, evening, note if evening else "", reserved=False)
+                around = False
             if seat is None:
                 state.unplaced += 1
+                state.notes.append(
+                    f"не поставлен автоматически — {self._why_none(state, evening)}; "
+                    "в «Не распределены»"
+                )
             else:
+                state.notes.append(self._why_here(state, seat, evening, around))
                 self._place(state, seat)
             evening = False
+
+    def _why_here(self, state: _State, seat: Seat, evening: bool, around: bool) -> str:
+        slot = self.slot[seat.slot_id]
+        column = self.column_of[seat.instructor_id]
+        text = f"автоматически к {self._name(seat.instructor_id)} в {_hhmm(slot.start)}"
+        if evening:
+            text += f" — {state.patient.evening_note}: вечером у инструктора 2/2"
+        else:
+            text += (
+                f" — у колонки наименьшая загрузка ({self.load[column.key]} пац.), "
+                "самое раннее подходящее время"
+            )
+        blocked = self._blockers(state, evening, before=slot.start)
+        if blocked:
+            text += f"; раньше мешало: {blocked}"
+        if not around and state.patient.reserved:
+            text += "; обойти возможные времена группы без выбранного времени не удалось"
+        return text
+
+    def _why_none(self, state: _State, evening: bool) -> str:
+        blocked = self._blockers(state, evening, before=None)
+        if evening:
+            return f"нет свободного вечернего слота у инструктора 2/2 ({blocked or 'все заняты'})"
+        return f"нет подходящей ячейки ({blocked or 'все ячейки заняты'})"
+
+    def _blockers(self, state: _State, evening: bool, *, before: int | None) -> str:
+        """Что не дало поставить в другие свободные ячейки: занятия пациента, «подряд»,
+        занятые ячейки и занятость инструкторов — кратко, по видам."""
+        patient: dict[str, list[str]] = {}
+        taken = closed = adjacent = 0
+        for column in self.columns:
+            for slot in self.slots:
+                if slot.evening != evening or (before is not None and slot.start >= before):
+                    continue
+                if self.taken[(column.key, slot.id)]:
+                    taken += 1
+                    continue
+                if not any(m.can_take(slot) and (m.evening or not evening) for m in column.members):
+                    closed += 1
+                    continue
+                busy = state.patient.busy_at(slot)
+                if busy:
+                    patient.setdefault(busy, [])
+                    if _hhmm(slot.start) not in patient[busy]:
+                        patient[busy].append(_hhmm(slot.start))
+                elif self._why_not_fits(state, slot):
+                    adjacent += 1
+        parts = [
+            f"пациент занят: {label} ({', '.join(times[:3])})" for label, times in patient.items()
+        ]
+        if adjacent:
+            parts.append("подряд с другим индивидуальным")
+        if taken:
+            parts.append(f"занято ячеек: {taken}")
+        if closed:
+            parts.append(f"у инструкторов занятость или не в смене: {closed}")
+        return ", ".join(parts)
 
     def _best(self, state: _State, evening: bool, note: str, *, reserved: bool) -> Seat | None:
         best: tuple[tuple[int, int, int], Seat] | None = None
@@ -231,3 +360,11 @@ class _Planner:
 
 def _overlaps(slot: GridSlot, spans: tuple[tuple[int, int], ...]) -> bool:
     return any(start < slot.end and slot.start < end for start, end in spans)
+
+
+def _hhmm(minutes: int) -> str:
+    return f"{minutes // 60}:{minutes % 60:02d}"
+
+
+def _count(units: int) -> str:
+    return "1 занятие" if units == 1 else f"{units} занятия"

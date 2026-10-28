@@ -105,12 +105,12 @@ class TestHtmxWindow:
 
         html = htmx(
             client,
-            reverse("catalog:instructor_add"),
+            reverse("staff:instructor_add"),
             {"ins-short_name": "", "ins-full_name": "", "ins-partner": "", "ins-display_order": ""},
         )
 
         assert html.lstrip().startswith('<div id="instructor-panel"')
-        assert '<div id="instructors-table" data-panel-table hx-swap-oob="true">' in html
+        assert '<div id="shift-calendar" data-panel-table hx-swap-oob="true">' in html
         assert "Обязательное поле" in html
 
 
@@ -377,7 +377,7 @@ class TestInstructorPartner:
 
         htmx(
             client,
-            reverse("catalog:instructor_edit", args=[volkov.pk]),
+            reverse("staff:instructor_edit", args=[volkov.pk]),
             {
                 "ins-short_name": "Волков",
                 "ins-full_name": "Волков В.В.",
@@ -398,7 +398,7 @@ class TestInstructorPartner:
 
         htmx(
             client,
-            reverse("catalog:instructor_edit", args=[lebedeva.pk]),
+            reverse("staff:instructor_edit", args=[lebedeva.pk]),
             {
                 "ins-short_name": "Лебедева",
                 "ins-full_name": "Лебедева Л.Л.",
@@ -414,11 +414,11 @@ class TestInstructorPartner:
     def test_other_department_rehab_sees_same_instructors(
         self, client, make_user, other_department, staff
     ):
-        """Инструкторы общие для центра: справочник один на всех с правом «Справочники»."""
+        """Инструкторы общие для центра: раздел один на всех с правом «Инструкторы»."""
         other = make_user("other-rehab", (other_department, Preset.REHAB))
         client.force_login(other)
 
-        html = client.get(reverse("catalog:index"), {"tab": "instructors"}).content.decode()
+        html = client.get(reverse("staff:shifts")).content.decode()
 
         assert "Волков" in html and "Соколов" in html
 
@@ -429,7 +429,7 @@ class TestInstructorPartner:
 )
 def test_index_access_matrix(client, request, user_fixture, status):
     client.force_login(request.getfixturevalue(user_fixture))
-    for tab in ("procedures", "instructors", "slots"):
+    for tab in ("procedures", "slots"):
         assert client.get(reverse("catalog:index"), {"tab": tab}).status_code == status
 
 

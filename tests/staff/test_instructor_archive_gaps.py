@@ -63,7 +63,9 @@ class TestScreensAfterArchive:
 
         html = client.get(reverse("staff:shifts")).content.decode()
 
-        assert "Волков" in html and "Соколов" not in html
+        # В календаре смен его нет — только в свёрнутом архиве под ним.
+        calendar, archive = html.split("В архиве (1)")
+        assert "Волков" in calendar and "Соколов" not in calendar and "Соколов" in archive
 
     def test_duties_screen_hides_archived(self, client, rehab, staff):
         staff_changes.delete_instructor(rehab, staff["sokolov"])
@@ -74,11 +76,11 @@ class TestScreensAfterArchive:
         assert response.status_code == 200
         assert "Соколов" not in response.content.decode()
 
-    def test_catalog_lists_archived_folded(self, client, rehab, staff):
+    def test_shifts_lists_archived_folded(self, client, rehab, staff):
         staff_changes.delete_instructor(rehab, staff["sokolov"])
         client.force_login(rehab)
 
-        html = client.get(reverse("catalog:index"), {"tab": "instructors"}).content.decode()
+        html = client.get(reverse("staff:shifts")).content.decode()
 
         folded = html[html.index("В архиве (1)") :]
         assert "Соколов" in folded
@@ -98,7 +100,7 @@ class TestUsed:
     def test_unused_delete_logged_with_author(self, client, rehab, slots):
         new = Instructor.objects.create(full_name="Новиков Н.Н.", short_name="Новиков")
         client.force_login(rehab)
-        url = reverse("catalog:instructor_delete", args=[new.pk])
+        url = reverse("staff:instructor_delete", args=[new.pk])
 
         step = htmx(client, url)
         assert "удалится совсем" in step and "Пара 2/2" not in step
@@ -107,7 +109,7 @@ class TestUsed:
         assert "Инструктор «Новиков» удалён" in html
         last = Instructor.history.filter(id=new.pk).order_by("-history_date").first()
         assert last.history_type == "-" and last.history_user == rehab
-        table = html[html.index('id="instructors-table"') :]
+        table = html[html.index('id="shift-calendar"') :]
         assert "Новиков" not in table
 
 
@@ -141,7 +143,7 @@ class TestOtherDepartmentPatients:
 
         html = htmx(
             client,
-            reverse("catalog:instructor_delete", args=[staff["volkov"].pk]),
+            reverse("staff:instructor_delete", args=[staff["volkov"].pk]),
             {"confirm": "1"},
         )
 

@@ -9,6 +9,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_not_required
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.paginator import Paginator
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
@@ -31,7 +32,7 @@ from apps.programs.services import get_program_or_404
 from apps.programs.views import prescriptions_oob
 from apps.staff.models import Instructor
 
-from . import board, board_days, manual, reports, services, staff_changes
+from . import board, board_days, journal, manual, reports, services, staff_changes
 from .forms import (
     EquipmentForm,
     GroupForm,
@@ -646,7 +647,14 @@ def _equipment_context(*, selected: int | None = None, oob: bool = False) -> dic
 def board_view(request: HttpRequest) -> HttpResponse:
     board_days.ensure_boards()
     day = _board_day(request.GET.get("date"))
-    return render(request, "scheduling/board.html", {"board": board.board(request.user, day)})
+    return render(
+        request,
+        "scheduling/board.html",
+        {
+            "board": board.board(request.user, day),
+            "can_journal": board.can_edit_board(request.user),
+        },
+    )
 
 
 def board_cell(request: HttpRequest) -> HttpResponse:
@@ -859,7 +867,12 @@ def board_equipment(request: HttpRequest, pk: int) -> HttpResponse:
     return render(
         request,
         "scheduling/_board_equipment.html",
-        {"booking": booking, "version": booking.version, "note_form": True},
+        {
+            "booking": booking,
+            "version": booking.version,
+            "note_form": True,
+            "history": journal.history(request.user, booking.program),
+        },
     )
 
 
@@ -932,6 +945,7 @@ def board_patient(request: HttpRequest) -> HttpResponse:
             "busy": board.busy_json(
                 board.occupied({candidate.program.pk}, day).get(candidate.program.pk, [])
             ),
+            "history": journal.history(request.user, candidate.program),
         },
     )
 
@@ -1379,6 +1393,45 @@ def load(request: HttpRequest) -> HttpResponse:
     end = _board_day(request.GET.get("end")) if request.GET.get("end") else today
     report = reports.instructor_load(request.user, start, end)
     return render(request, "scheduling/load.html", {"report": report})
+
+
+def journal_view(request: HttpRequest) -> HttpResponse:
+    """Журнал расписания за неделю (FR-SCH-19): кто или что поставило пациента, куда и почему."""
+    # Не ``_board_day``: тренажёры в журнале — и на даты после завтрашней шахматки.
+    try:
+        day = date.fromisoformat(request.GET.get("date", "").strip())
+    except ValueError:
+        day = None
+    filters = journal.Filters(
+        day=day,
+        patient=request.GET.get("patient", ""),
+        subject=request.GET.get("subject", ""),
+        source=request.GET.get("source", ""),
+        program_id=_int(request.GET.get("program")) if request.GET.get("program") else None,
+    )
+    items = journal.entries(request.user, filters)
+    page = Paginator(items, 100).get_page(request.GET.get("page"))
+    query = request.GET.copy()
+    query.pop("page", None)
+    program = None
+    if filters.program_id is not None:
+        program = Program.objects.filter(pk=filters.program_id).first()
+    return render(
+        request,
+        "scheduling/journal.html",
+        {
+            "page": page,
+            "filters": filters,
+            "query": query.urlencode(),
+            "program": program,
+            "subjects": [(journal.INDIVIDUAL, journal.INDIVIDUAL_TITLE)]
+            + [
+                (journal.equipment_subject(e.pk), e.name)
+                for e in Equipment.objects.order_by("name")
+            ],
+            "keep_days": journal.KEEP_DAYS,
+        },
+    )
 
 
 def board_export(request: HttpRequest) -> HttpResponse:

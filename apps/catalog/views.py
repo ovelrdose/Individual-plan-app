@@ -5,7 +5,7 @@ from typing import Any
 from django import forms
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import HttpRequest, HttpResponse
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -18,11 +18,7 @@ from apps.accounts.access import (
     is_admin,
 )
 from apps.accounts.models import Right, User
-from apps.scheduling import staff_changes
 from apps.scheduling.services import for_viewer
-from apps.staff import services as staff_services
-from apps.staff.forms import InstructorForm
-from apps.staff.models import Instructor
 
 from . import services
 from .forms import ProcedureForm
@@ -53,7 +49,6 @@ def procedure_search(request: HttpRequest) -> HttpResponse:
 
 TAB_LABELS = [
     ("procedures", "Процедуры"),
-    ("instructors", "Инструкторы"),
     ("slots", "Сетка слотов"),
     ("exports", "Журнал выгрузок карт"),
 ]
@@ -62,13 +57,16 @@ TAB_LABELS = [
 def _tabs(user: User) -> list[str]:
     """Вкладки по правам: справочники — «Справочники», журнал выгрузок — «Пользователи»
     (в журнале ФИО пациентов)."""
-    tabs = ["procedures", "instructors", "slots"] if services.can_edit_catalog(user) else []
+    tabs = ["procedures", "slots"] if services.can_edit_catalog(user) else []
     if has_right(user, Right.USERS):
         tabs.append("exports")
     return tabs
 
 
 def catalog(request: HttpRequest) -> HttpResponse:
+    if request.GET.get("tab") == "instructors":
+        # Инструкторы переехали в свой раздел (решение 87) — старые ссылки ведут туда.
+        return redirect("staff:shifts")
     tabs = _tabs(request.user)
     if not tabs:
         raise PermissionDenied("Нет права на справочники.")
@@ -76,8 +74,6 @@ def catalog(request: HttpRequest) -> HttpResponse:
     context: dict[str, Any] = {"tab": tab, "tabs": tabs, "tab_labels": TAB_LABELS}
     if tab == "procedures":
         context |= _procedures_context(request)
-    elif tab == "instructors":
-        context |= _instructors_context()
     elif tab == "slots":
         context["slots"] = InstructorSlot.objects.order_by("start")
     else:
@@ -246,144 +242,6 @@ def _procedure_panel(
     return HttpResponse(panel + table)
 
 
-# --- Инструкторы --------------------------------------------------------------------------
-
-
-def _instructors_context(*, selected: int | None = None, oob: bool = False) -> dict:
-    items = list(
-        Instructor.objects.select_related("partner").order_by("display_order", "short_name")
-    )
-    return {
-        "instructors": [i for i in items if i.is_active],
-        "archived": [i for i in items if not i.is_active],
-        "selected": selected,
-        "oob": oob,
-    }
-
-
-def _instructor(request: HttpRequest, pk: int) -> Instructor:
-    staff_services.require_instructors(request.user)
-    return get_object_or_404(Instructor, pk=pk)
-
-
-def instructor_add(request: HttpRequest) -> HttpResponse:
-    staff_services.require_instructors(request.user)
-    form = InstructorForm(request.POST or None, prefix="ins")
-    if request.method == "POST" and form.is_valid():
-        saved = _save_instructor(request, form)
-        if saved is not None:
-            return _instructor_panel(
-                request,
-                saved,
-                message=f"Инструктор «{saved.short_name}» заведён. Шаблон смены задайте на "
-                "экране «Смены».",
-            )
-    return _instructor_panel(request, None, form=form)
-
-
-def instructor_edit(request: HttpRequest, pk: int) -> HttpResponse:
-    instructor = _instructor(request, pk)
-    if request.method != "POST":
-        return _instructor_panel(request, instructor)
-    form = InstructorForm(request.POST, instance=instructor, prefix="ins")
-    if form.is_valid():
-        saved = _save_instructor(request, form)
-        if saved is not None:
-            return _instructor_panel(request, saved, message="Сохранено.")
-    instructor.refresh_from_db()
-    return _instructor_panel(request, instructor, form=form)
-
-
-def _save_instructor(request: HttpRequest, form: InstructorForm) -> Instructor | None:
-    return _save(
-        form,
-        lambda user, item: staff_services.save_instructor_card(
-            user, item, form.cleaned_data["partner"]
-        ),
-        request.user,
-    )
-
-
-@require_POST
-def instructor_delete(request: HttpRequest, pk: int) -> HttpResponse:
-    instructor = _instructor(request, pk)
-    if not request.POST.get("confirm"):
-        details = []
-        if instructor.partner_id:
-            details.append(f"Пара 2/2 разорвётся: {instructor.partner} останется один.")
-        confirm = {
-            "used": staff_changes.instructor_is_used(instructor),
-            "programs": None,
-            "details": details,
-            "url": reverse("catalog:instructor_delete", args=[instructor.pk]),
-        }
-        return _instructor_panel(request, instructor, confirm=confirm)
-    try:
-        removed = staff_changes.delete_instructor(request.user, instructor)
-    except staff_services.StaffError as error:
-        return _instructor_panel(request, instructor, error=str(error))
-    if not removed.archived:
-        return _instructor_panel(
-            request, None, message=f"Инструктор «{instructor.short_name}» удалён.", closed=True
-        )
-    instructor.refresh_from_db()
-    return _instructor_panel(request, instructor, removed=removed)
-
-
-@require_POST
-def instructor_restore(request: HttpRequest, pk: int) -> HttpResponse:
-    instructor = _instructor(request, pk)
-    staff_changes.restore_instructor(request.user, instructor)
-    instructor.refresh_from_db()
-    return _instructor_panel(
-        request,
-        instructor,
-        message=f"«{instructor.short_name}» снова работает. Задайте ему шаблон смены на экране "
-        "«Смены», напарника — здесь.",
-    )
-
-
-def _instructor_panel(
-    request: HttpRequest,
-    instructor: Instructor | None,
-    *,
-    form: InstructorForm | None = None,
-    message: str = "",
-    error: str = "",
-    confirm: dict | None = None,
-    removed: object | None = None,
-    closed: bool = False,
-) -> HttpResponse:
-    if instructor is not None and form is None:
-        form = InstructorForm(instance=instructor, prefix="ins")
-    displaced, hidden = [], 0
-    if removed is not None:
-        # Фамилии — только пациентов своих отделений (FR-ACC-2), чужие — числом.
-        own = set(departments_for(request.user).values_list("pk", flat=True))
-        displaced = [d for d in removed.displaced if d.program.department_id in own]
-        hidden = len({d.program.pk for d in removed.displaced} - {d.program.pk for d in displaced})
-    panel = render_to_string(
-        "catalog/_instructor_panel.html",
-        {
-            "instructor": instructor,
-            "form": None if closed else form,
-            "message": message,
-            "error": error,
-            "confirm": confirm,
-            "removed": removed,
-            "displaced": displaced,
-            "hidden": hidden,
-        },
-        request=request,
-    )
-    table = render_to_string(
-        "catalog/_instructors.html",
-        _instructors_context(selected=instructor.pk if instructor else None, oob=True),
-        request=request,
-    )
-    return HttpResponse(panel + table)
-
-
 # --- Журнал выгрузок карт (FR-CRD-5) ------------------------------------------------------
 
 
@@ -414,7 +272,7 @@ def _save(form: forms.ModelForm, action: Callable[[User, Any], Any], user: User)
     """Сервис → ошибки в форме: понятный текст сервиса или проверки модели."""
     try:
         return action(user, form.instance)
-    except (services.CatalogError, staff_services.StaffError) as error:
+    except services.CatalogError as error:
         form.add_error(None, str(error))
         return None
     except ValidationError as error:

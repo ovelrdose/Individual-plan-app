@@ -32,7 +32,7 @@ from apps.programs.domain import room_sort_key
 from apps.programs.models import Prescription, Program, withdrawn_on
 from apps.staff.models import Instructor, InstructorBlock, InstructorDuty
 
-from . import board_days, staff_changes
+from . import board_days, journal, staff_changes
 from .domain import (
     Busy,
     EquipmentLoad,
@@ -99,6 +99,7 @@ def pool_groups() -> list[Procedure]:
 
 
 @transaction.atomic
+@journal.logged("Выбрана группа бассейна")
 def choose_pool_group(user: User, prescription: Prescription, group: Procedure | None) -> None:
     """Группа бассейна для назначения «Бассейн» без группы (TZ.md, FR-PRG-3). Пустое значение
     снимает выбор. Расписание сразу пересобирается: занятия встают во время выбранной группы."""
@@ -149,6 +150,7 @@ class GroupTimeResult:
 
 
 @transaction.atomic
+@journal.logged("Выбрано время группы")
 def choose_group_time(
     user: User, prescription: Prescription, session: GroupSession | None
 ) -> GroupTimeResult:
@@ -282,12 +284,23 @@ def replan(program: Program, *, refill: bool = True, keep_today: bool = False) -
     ``refill`` — если у тренажёра освободилось место с завтрашнего дня, ждущие его пациенты
     встают сами (FR-SCH-11a). ``keep_today`` — так встают ждущие: сегодняшние тренажёры не
     меняются, в сегодняшний день ждущих ставит специалист.
+
+    Изменения пишутся в журнал расписания (FR-SCH-19): от имени действия, внутри которого
+    позвали пересборку, а без него — от системы.
     """
+    with journal.action(
+        "Пересборка расписания: изменились назначения, курс или расписание групп", fallback=True
+    ):
+        return _replan(program, refill=refill, keep_today=keep_today)
+
+
+def _replan(program: Program, *, refill: bool, keep_today: bool) -> Proposal:
     program = (
         Program.objects.select_for_update(of=("self",))
         .select_related("department")
         .get(pk=program.pk)
     )
+    journal.watch([program.pk])
     every = {
         p.pk: p for p in program.prescriptions.select_related("procedure__equipment", "pool_group")
     }
@@ -343,7 +356,7 @@ def replan(program: Program, *, refill: bool = True, keep_today: bool = False) -
             and not _still_valid(booking, every, active)
         ):
             booking.delete()
-    pinned = list(program.bookings.all())
+    pinned = list(program.bookings.select_related("procedure"))
 
     removed: Counter[tuple[int, date]] = Counter()
     for item in RemovedSession.objects.filter(prescription__program=program):
@@ -358,11 +371,23 @@ def replan(program: Program, *, refill: bool = True, keep_today: bool = False) -
     )
     snapshot = Snapshot(
         needs=needs,
-        patient_busy=tuple(Busy(b.date, _minutes(b.start), _minutes(b.end)) for b in pinned),
+        patient_busy=tuple(
+            Busy(
+                b.date,
+                _minutes(b.start),
+                _minutes(b.end),
+                f"{b.procedure.card_label or b.procedure.name} {b.start:%-H:%M}",
+            )
+            for b in pinned
+        ),
         equipment_load=_equipment_load(program, equipment_ids),
         soft_busy=tuple(soft),
     )
     proposal = propose(snapshot)
+    for (prescription_id, day), text in proposal.reasons.items():
+        equipment_id = every[prescription_id].procedure.equipment_id
+        if equipment_id is not None:
+            journal.explain(program.pk, journal.equipment_subject(equipment_id), day, text)
 
     Booking.objects.bulk_create(
         [
@@ -454,6 +479,18 @@ def refill_equipment(equipment_ids: set[int], source: Program | None = None) -> 
     waiting.sort(key=lambda p: (p.start_date, room_sort_key(p.room), p.pk))
     # Записи ждущего меняет только его собственная пересборка — недостающее считаем один раз.
     missing = _missing_equipment(waiting, equipment_ids, today)
+    after = f" (после правки {source.room_label} {source.surname})" if source is not None else ""
+    with journal.action(f"Освободилось место на тренажёре{after} — ждущий встал сам"):
+        return _refill(waiting, missing, free, equipment_ids, today)
+
+
+def _refill(
+    waiting: list[Program],
+    missing: dict[int, set[tuple[int, date]]],
+    free: set[tuple[int, date]],
+    equipment_ids: set[int],
+    today: date,
+) -> list[Program]:
     replanned = []
     for program in waiting:
         # Пересборка программы стоит дорого, а свободное место обычно одно: пересобираем
@@ -1363,6 +1400,12 @@ def _replan_current(
     )
     if save is not None:
         save()
+    with journal.action("Изменилось расписание групп или тренажёр в справочнике"):
+        _replan_each(programs, refill)
+    return programs
+
+
+def _replan_each(programs: list[Program], refill: bool) -> None:
     # Места делятся по очереди: кто раньше поступил, тот первым (FR-SCH-11a).
     for program in sorted(programs, key=lambda p: (p.start_date, room_sort_key(p.room), p.pk)):
         replan(program, refill=False)
@@ -1376,7 +1419,6 @@ def _replan_current(
         ) - {None}
         if equipment_ids:
             refill_equipment(equipment_ids)
-    return programs
 
 
 # --- Чтение: что показать на экране и в карте ----------------------------------------------

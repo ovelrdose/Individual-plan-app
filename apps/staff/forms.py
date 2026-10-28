@@ -21,18 +21,27 @@ def board_sessions() -> QuerySet[GroupSession]:
     )
 
 
-class ShiftPatternForm(BootstrapFormMixin, forms.Form):
-    pattern = forms.ChoiceField(label="Шаблон", choices=ShiftPatternKind.choices)
+class InstructorForm(BootstrapFormMixin, forms.ModelForm):
+    """Карточка инструктора (FR-STF-1, решения 83, 87): фамилия, ФИО, напарник 2/2, порядок
+    и шаблон смены с даты. «Работает» нет — архив."""
+
+    pattern = forms.ChoiceField(
+        label="Шаблон смены",
+        choices=[("", "не задан — не работает"), *ShiftPatternKind.choices],
+        required=False,
+    )
     anchor_date = forms.DateField(
         label="Первый рабочий день цикла",
         widget=DateInput(),
-        help_text="Для 2/2 — первый из двух рабочих дней. Для 5/2 и «каждый день» — любой.",
+        required=False,
+        help_text="Для 2/2 — первый из двух рабочих дней.",
     )
-    valid_from = forms.DateField(label="Действует с", widget=DateInput())
-
-
-class InstructorForm(BootstrapFormMixin, forms.ModelForm):
-    """Инструктор в «Справочниках» (FR-STF-1, решение 83). «Работает» нет — архив."""
+    valid_from = forms.DateField(
+        label="Шаблон действует с",
+        widget=DateInput(),
+        required=False,
+        help_text="Прежний шаблон закончится накануне.",
+    )
 
     class Meta:
         model = Instructor
@@ -45,6 +54,30 @@ class InstructorForm(BootstrapFormMixin, forms.ModelForm):
             partners = partners.exclude(pk=self.instance.pk)
         self.fields["partner"].queryset = partners
         self.fields["partner"].empty_label = "нет — работает один"
+        # Шаблон, с которым открыли окно: менять смену, только если его действительно сменили.
+        self.shown_pattern = (self.initial.get("pattern", ""), self.initial.get("anchor_date"))
+
+    def clean(self):
+        data = super().clean()
+        if not data.get("pattern") and self.shown_pattern[0]:
+            self.add_error(
+                "pattern",
+                "Шаблон не убирают: нерабочие дни отмечают в календаре, ушедшего — в архив.",
+            )
+        if data.get("pattern"):
+            for name in ("anchor_date", "valid_from"):
+                if not data.get(name):
+                    self.add_error(name, "Укажите дату.")
+        return data
+
+    def pattern_change(self) -> dict | None:
+        """Новый шаблон смены для ``change_shift_pattern`` или None, если его не меняли."""
+        data = self.cleaned_data
+        if not data.get("pattern"):
+            return None
+        if (data["pattern"], data["anchor_date"]) == self.shown_pattern:
+            return None
+        return {key: data[key] for key in ("pattern", "anchor_date", "valid_from")}
 
     def validate_unique(self):
         # Занятость напарника не ошибка: сервис set_partner сам разорвёт его прежнюю пару.

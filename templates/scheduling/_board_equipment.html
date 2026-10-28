@@ -18,6 +18,7 @@
         <button type="submit" class="btn btn-sm btn-outline-secondary" title="Сохранить пометку"><i class="bi bi-tag"></i></button>
       </form>
       <div class="form-text">С этой даты и на следующие дни. Пустое поле убирает пометку.</div>
+      {% include "scheduling/_journal_history.html" with program=booking.program %}
     {% endif %}
     {% if confirm %}
       <div class="alert alert-warning py-2">

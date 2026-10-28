@@ -15,8 +15,8 @@ class Right(models.TextChoices):
     PROGRAMS_DELETE = "programs_delete", "Программы: удалять"
     SCHEDULE = "schedule", "Расписание пациентов: индивидуальные, группы и тренажёры"
     GROUP_SCHEDULE = "group_schedule", "Групповые занятия: расписание групп"
-    STAFF = "staff", "Инструкторы: смены и распорядок"
-    CATALOG = "catalog", "Справочники: процедуры, тренажёры, инструкторы"
+    STAFF = "staff", "Инструкторы: состав, пары, смены и распорядок"
+    CATALOG = "catalog", "Справочники: процедуры, тренажёры"
     USERS = "users", "Пользователи и отделения (видит все отделения)"
 
 

@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 
-{% block title %}Загрузка инструкторов{% endblock %}
+{% block title %}Инструкторы — загрузка{% endblock %}
 
 {% block content %}
-  <h1 class="h3">Загрузка инструкторов</h1>
+  {% include "staff/_tabs.html" with active="load" %}
   <form method="get" class="d-flex align-items-end gap-2 mb-3">
     <div><label for="load-start" class="form-label small mb-0">с</label>
       <input id="load-start" type="date" name="start" value="{{ report.start|date:'Y-m-d' }}" class="form-control form-control-sm"></div>

@@ -183,7 +183,7 @@ class TestEndedRecords:
         with pytest.raises(staff_services.StaffError, match="уже в архиве"):
             staff_changes.delete_instructor(rehab, volkov)
         client.force_login(rehab)
-        html = htmx(client, reverse("catalog:instructor_delete", args=[volkov.pk]), {"confirm": 1})
+        html = htmx(client, reverse("staff:instructor_delete", args=[volkov.pk]), {"confirm": 1})
         assert "уже в архиве" in html
 
     def test_history_has_author(self, rehab, staff):
@@ -200,7 +200,7 @@ class TestRestore:
         staff_changes.delete_instructor(rehab, volkov)
         client.force_login(rehab)
 
-        html = htmx(client, reverse("catalog:instructor_restore", args=[volkov.pk]))
+        html = htmx(client, reverse("staff:instructor_restore", args=[volkov.pk]))
 
         volkov.refresh_from_db()
         assert volkov.is_active and volkov.partner is None
@@ -232,7 +232,7 @@ class TestRestore:
         sokolov = staff["sokolov"]
         html = htmx(
             client,
-            reverse("catalog:instructor_edit", args=[sokolov.pk]),
+            reverse("staff:instructor_edit", args=[sokolov.pk]),
             {
                 "ins-short_name": "Соколов",
                 "ins-full_name": "Соколов С.С.",
@@ -253,7 +253,7 @@ class TestSameSurname:
 
         html = htmx(
             client,
-            reverse("catalog:instructor_add"),
+            reverse("staff:instructor_add"),
             {"ins-short_name": "Волков", "ins-full_name": "Волков Д.Д.", "ins-display_order": "0"},
         )
 
@@ -271,7 +271,7 @@ class TestSameSurname:
         client.force_login(rehab)
         html = htmx(
             client,
-            reverse("catalog:instructor_add"),
+            reverse("staff:instructor_add"),
             {"ins-short_name": "  ", "ins-full_name": "", "ins-display_order": "0"},
         )
         assert "Обязательное поле" in html
@@ -289,7 +289,7 @@ class TestRights:
         client.force_login(doctor)
 
         response = client.post(
-            reverse(f"catalog:{name}", args=[volkov.pk]),
+            reverse(f"staff:{name}", args=[volkov.pk]),
             {
                 "confirm": "1",
                 "ins-short_name": "Взлом",
@@ -305,7 +305,7 @@ class TestRights:
     def test_doctor_add_forbidden(self, client, doctor, slots):
         client.force_login(doctor)
         response = client.post(
-            reverse("catalog:instructor_add"),
+            reverse("staff:instructor_add"),
             {"ins-short_name": "Новиков", "ins-full_name": "Н", "ins-display_order": 0},
         )
         assert response.status_code == 403
@@ -313,7 +313,7 @@ class TestRights:
 
     def test_anonymous_redirected(self, client, staff):
         response = client.post(
-            reverse("catalog:instructor_delete", args=[staff["volkov"].pk]), {"confirm": "1"}
+            reverse("staff:instructor_delete", args=[staff["volkov"].pk]), {"confirm": "1"}
         )
         assert response.status_code == 302 and "/login/" in response["Location"]
         staff["volkov"].refresh_from_db()

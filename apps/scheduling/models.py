@@ -2,11 +2,14 @@ from django.contrib.postgres.constraints import ExclusionConstraint
 from django.contrib.postgres.fields import DateTimeRangeField, RangeOperators
 from django.db import models
 from django.db.models import F, Func, Q
+from django.utils.functional import cached_property
 from simple_history.models import HistoricalRecords
 
 from apps.catalog.models import Equipment, GroupSession, InstructorSlot, Procedure, ProcedureKind
 from apps.programs.models import Prescription, Program
 from apps.staff.models import Instructor
+
+from .domain.journal import Shown, shown
 
 
 class BookingPeriod(Func):
@@ -242,3 +245,63 @@ class RemovedSession(models.Model):
 
     def __str__(self) -> str:
         return f"{self.date:%d.%m} {self.prescription}: {self.get_kind_display()} {self.units}"
+
+
+class EventSource(models.TextChoices):
+    SYSTEM = "system", "система"
+    MANUAL = "manual", "вручную"
+
+
+class ScheduleEvent(models.Model):
+    """Запись журнала расписания (FR-SCH-19, решение 86): где пациент был и где стал на
+    индивидуальных или на тренажёре, в какие даты, кто или что это сделало и почему.
+
+    Пишется только при изменении — сравнением состояния пациента до и после действия
+    (``journal``). Хранится неделю: старше удаляются при составлении новой шахматки."""
+
+    created_at = models.DateTimeField("когда", auto_now_add=True, db_index=True)
+    program = models.ForeignKey(
+        Program, on_delete=models.CASCADE, related_name="+", verbose_name="программа"
+    )
+    # «Индивидуальные» или название тренажёра на момент записи.
+    subject = models.CharField("что", max_length=100)
+    equipment = models.ForeignKey(
+        Equipment,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="тренажёр",
+    )
+    date_from = models.DateField("с даты")
+    date_to = models.DateField("по дату")
+    before = models.CharField("было", max_length=300, blank=True)
+    after = models.CharField("стало", max_length=300, blank=True)
+    source = models.CharField("кто", max_length=10, choices=EventSource.choices)
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="пользователь",
+    )
+    action = models.CharField("действие", max_length=300)
+    reason = models.TextField("почему", blank=True)
+
+    class Meta:
+        verbose_name = "запись журнала расписания"
+        verbose_name_plural = "журнал расписания"
+        ordering = ["-created_at", "-pk"]
+        indexes = [
+            models.Index(fields=["program", "-created_at"], name="schedule_event_program"),
+            models.Index(fields=["date_from", "date_to"], name="schedule_event_dates"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.created_at:%d.%m %H:%M} {self.subject}: {self.before} → {self.after}"
+
+    @cached_property
+    def shown(self) -> Shown:
+        """«Было → стало» только по изменившимся занятиям (``domain.journal.shown``)."""
+        return shown(self.before, self.after)
